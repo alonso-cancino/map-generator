@@ -20,7 +20,7 @@ interface PointerPosition {
 
 const PADDING = 48;
 
-export default function MapView({ bundle }: MapViewProps) {
+export function MapView({ bundle }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
@@ -263,6 +263,8 @@ export default function MapView({ bundle }: MapViewProps) {
     </div>
   );
 }
+
+export default MapView;
 
 function ensureSvgLayer(
   selection: d3.Selection<SVGSVGElement, unknown, null, undefined>,

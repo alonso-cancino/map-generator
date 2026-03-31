@@ -9,7 +9,7 @@ export async function loadBundle(path: string): Promise<FrontendBundle> {
   return parseBundle(raw);
 }
 
-function parseBundle(raw: RawFrontendBundle): FrontendBundle {
+export function parseBundle(raw: RawFrontendBundle): FrontendBundle {
   const zones = new Map<number, ZoneRecord>();
   for (const zone of Object.values(raw.zones)) {
     zones.set(zone.id, {

@@ -1,15 +1,32 @@
 {
-  "name": "dcel-map-frontend",
-  "private": true,
-  "version": "0.1.0",
+  "name": "@alonso-cancino/dcel-map-frontend",
+  "version": "0.2.0",
   "type": "module",
+  "main": "./dist-lib/index.js",
+  "module": "./dist-lib/index.js",
+  "types": "./dist-lib/index.d.ts",
+  "files": [
+    "dist-lib"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist-lib/index.d.ts",
+      "import": "./dist-lib/index.js"
+    },
+    "./style.css": "./dist-lib/index.css"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run build:app && npm run build:lib",
+    "build:app": "tsc -b && vite build",
+    "build:lib": "tsc -p tsconfig.lib.json && vite build --config vite.lib.config.ts",
+    "pack:lib": "npm pack",
     "preview": "vite preview"
   },
   "dependencies": {
-    "d3": "^7.9.0",
+    "d3": "^7.9.0"
+  },
+  "peerDependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

@@ -21,6 +21,8 @@ uv.lock
 dist/
 build/
 node_modules/
+frontend/dist-lib/
+frontend/*.tgz
 *.egg-info/
 *.egg
 .eggs/
@@ -58,6 +60,7 @@ dcel_map.json
 dcel_map.png
 debug_label_map.png
 local/
+scripts/
 
 # Secrets / env
 .env

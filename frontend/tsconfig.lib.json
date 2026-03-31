@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noEmit": false,
+    "outDir": "dist-lib"
+  },
+  "include": ["src/index.ts", "src/MapView.tsx", "src/bundle.ts", "src/types.ts", "src/animations.ts"]
+}

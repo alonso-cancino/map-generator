@@ -88,6 +88,51 @@ The tracked demo inputs live in [`examples/atlantis`](/home/alosc/proyectos/map/
 
 The frontend is configured for GitHub Pages static hosting. A workflow in `.github/workflows/deploy-pages.yml` builds `frontend/` and publishes the interactive demo using the bundled Atlantis example.
 
+## Versioning
+
+This project uses Semantic Versioning.
+
+- increment `MAJOR` for breaking CLI, bundle-schema, or API changes
+- increment `MINOR` for backward-compatible features
+- increment `PATCH` for backward-compatible fixes
+
+The current release version is `0.2.0`. Tag releases as `vX.Y.Z`, for example `v0.2.0`.
+
+## Releases
+
+Pushing a tag like `v0.2.0` triggers the release workflow in `.github/workflows/release.yml`.
+
+Each release publishes consumable artifacts:
+
+- Python source distribution and wheel from `dist/`
+- a production frontend archive, `frontend-dist.tar.gz`
+- an npm package tarball for the renderer, `alonso-cancino-dcel-map-frontend-<version>.tgz`
+- the example frontend bundle, `map_bundle.json`
+- the Atlantis example inputs as `atlantis-example-inputs.tar.gz`
+- the demo screenshot, `atlantis-map.png`
+
+You can consume the renderer package from npm by installing the published tarball, or later from the npm registry once it is published there. The library entrypoint exports `MapView`, `loadBundle`, `parseBundle`, and the bundle/type definitions.
+
+When the repository is configured for trusted publishing, the same release workflow also publishes:
+
+- the Python package to PyPI
+- the renderer package to npm
+
+### One-time registry setup
+
+To make automated publishing work, you still need to configure each registry once:
+
+1. PyPI:
+Create the `dcel-map` project on PyPI, then add a Trusted Publisher for this GitHub repository and the workflow file `release.yml`.
+
+2. npm:
+Create the `@alonso-cancino/dcel-map-frontend` package on npm, then add a Trusted Publisher for this GitHub repository and the workflow file `release.yml`.
+
+3. GitHub:
+If you want deployment protection, create `pypi` and `npm` environments in the repository settings to match the workflow.
+
+After that, pushing a tag like `v0.2.0` will build, attach release artifacts, and publish both packages automatically.
+
 ## Development
 
 ```bash
