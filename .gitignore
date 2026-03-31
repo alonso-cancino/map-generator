@@ -60,7 +60,7 @@ dcel_map.json
 dcel_map.png
 debug_label_map.png
 local/
-scripts/
+scripts/__pycache__/
 
 # Secrets / env
 .env

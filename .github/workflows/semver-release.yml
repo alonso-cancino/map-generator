@@ -1,0 +1,50 @@
+name: Semver Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semver-release-main
+  cancel-in-progress: false
+
+jobs:
+  version-and-tag:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Determine next version
+        id: semver
+        run: python scripts/semver_release.py plan
+
+      - name: Stop when no release is needed
+        if: steps.semver.outputs.changed != 'true'
+        run: echo "No unreleased commits since the latest semantic version tag."
+
+      - name: Apply release version
+        if: steps.semver.outputs.changed == 'true'
+        run: python scripts/semver_release.py apply --version "${{ steps.semver.outputs.version }}"
+
+      - name: Commit and tag release
+        if: steps.semver.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml dcel_builder/__init__.py frontend/package.json frontend/package-lock.json
+          git commit -m "Release v${{ steps.semver.outputs.version }}"
+          git tag "v${{ steps.semver.outputs.version }}"
+          git push origin main --follow-tags

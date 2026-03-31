@@ -90,17 +90,17 @@ The frontend is configured for GitHub Pages static hosting. A workflow in `.gith
 
 ## Versioning
 
-This project uses Semantic Versioning.
+This project uses Semantic Versioning and derives releases from commits on `main`.
 
-- increment `MAJOR` for breaking CLI, bundle-schema, or API changes
-- increment `MINOR` for backward-compatible features
-- increment `PATCH` for backward-compatible fixes
+- `BREAKING CHANGE` in a commit body, or `type!:` in the subject, increments `MAJOR`
+- subjects starting with `feat`, `add`, or `implement` increment `MINOR`
+- all other changes increment `PATCH`
 
-The current release version is `0.2.0`. Tag releases as `vX.Y.Z`, for example `v0.2.0`.
+The automation writes the chosen version into Python and frontend package metadata, commits `Release vX.Y.Z`, and creates the matching `vX.Y.Z` tag.
 
 ## Releases
 
-Pushing a tag like `v0.2.0` triggers the release workflow in `.github/workflows/release.yml`.
+Pushing to `main` triggers the semantic version workflow in `.github/workflows/semver-release.yml`. That workflow computes the next version, commits the versioned files, and pushes the matching release tag. The tag then triggers `.github/workflows/release.yml`.
 
 Each release publishes consumable artifacts:
 
@@ -131,7 +131,7 @@ Create the `@alonso-cancino/dcel-map-frontend` package on npm, then add a Truste
 3. GitHub:
 If you want deployment protection, create `pypi` and `npm` environments in the repository settings to match the workflow.
 
-After that, pushing a tag like `v0.2.0` will build, attach release artifacts, and publish both packages automatically.
+After that, pushing to `main` will create the next semantic version release and publish both packages automatically.
 
 ## Development
 
