@@ -1,0 +1,177 @@
+:root {
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: #f8f4ea;
+  background:
+    radial-gradient(circle at top, rgba(255, 191, 128, 0.2), transparent 32%),
+    linear-gradient(180deg, #13212e 0%, #0c141d 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+}
+
+.app-shell {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+
+.status-card {
+  margin-bottom: 24px;
+  padding: 16px 18px;
+  border: 1px solid rgba(248, 244, 234, 0.18);
+  border-radius: 16px;
+  background: rgba(10, 16, 24, 0.72);
+  backdrop-filter: blur(14px);
+}
+
+.status-card.error {
+  border-color: rgba(242, 115, 87, 0.55);
+  color: #ffd7cf;
+}
+
+.map-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.map-toolbar {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 2;
+}
+
+.map-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  color: #0f1820;
+  background: #f2b66d;
+  cursor: pointer;
+}
+
+.map-viewport {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(242, 182, 109, 0.12), transparent 38%),
+    linear-gradient(180deg, rgba(7, 12, 18, 0.92), rgba(16, 28, 39, 0.88));
+}
+
+.map-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.map-svg:active {
+  cursor: grabbing;
+}
+
+.region {
+  transition:
+    fill 180ms ease,
+    opacity 180ms ease,
+    stroke 180ms ease,
+    stroke-width 180ms ease;
+}
+
+.region.hover-default.is-hovered {
+  opacity: 1;
+  filter: drop-shadow(0 0 0.015rem rgba(242, 182, 109, 0.7));
+  animation: regionPulse 1.6s ease-in-out infinite;
+}
+
+.region-border {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.78);
+  stroke-width: 1.4px;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  pointer-events: none;
+  transition:
+    stroke 180ms ease,
+    stroke-width 180ms ease;
+}
+
+.region-border.is-hovered {
+  stroke: #ffe08a;
+  stroke-width: 2.8px;
+}
+
+.region-border.is-focused {
+  stroke: #fff4c2;
+  stroke-width: 2.2px;
+}
+
+.active-outline {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 0;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.active-outline.is-hovered {
+  stroke: #ffe08a;
+  stroke-width: 2.8px;
+}
+
+.active-outline.is-focused {
+  stroke: #fff4c2;
+  stroke-width: 2.2px;
+}
+
+.map-tooltip {
+  position: absolute;
+  z-index: 3;
+  max-width: 240px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 240, 184, 0.32);
+  border-radius: 999px;
+  background: rgba(11, 17, 24, 0.88);
+  color: #fff4c2;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.2;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(10px);
+}
+
+@keyframes regionPulse {
+  0%,
+  100% {
+    opacity: 0.96;
+  }
+
+  50% {
+    opacity: 0.78;
+  }
+}
+
+@media (max-width: 960px) {
+}

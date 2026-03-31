@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dcel-map"
+version = "0.1.0"
+description = "Generate a leaf-level DCEL map from a hierarchical zone tree"
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "networkx>=3.4",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "shapely>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff",
+]
+
+[project.scripts]
+dcel-map = "dcel_builder.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dcel_builder"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.15.6",
+]
