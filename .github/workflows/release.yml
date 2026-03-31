@@ -163,5 +163,17 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Resolve frontend package tarball
+        id: frontend-package
+        run: |
+          shopt -s nullglob
+          tarballs=(release-artifacts/*.tgz)
+          if [ "${#tarballs[@]}" -ne 1 ]; then
+            echo "Expected exactly one frontend package tarball, found ${#tarballs[@]}"
+            ls -la release-artifacts
+            exit 1
+          fi
+          echo "path=./${tarballs[0]}" >> "$GITHUB_OUTPUT"
+
       - name: Publish renderer package to npm
-        run: npm publish release-artifacts/*.tgz --access public --provenance
+        run: npm publish "${{ steps.frontend-package.outputs.path }}" --access public --provenance
