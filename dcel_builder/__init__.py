@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from dcel_builder.frontend_bundle import build_frontend_bundle
 from dcel_builder.hierarchy import build_leaf_dcel_from_tree
 from dcel_builder.tree_loader import load_tree_inputs
 
-__version__ = "0.2.0"
+
+def _package_version() -> str:
+    try:
+        return version("dcel-map-generator")
+    except PackageNotFoundError:
+        return "0.2.0"
+
+
+__version__ = _package_version()
 
 
 def generate_map_artifacts(

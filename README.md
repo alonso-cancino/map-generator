@@ -123,7 +123,7 @@ When the repository is configured for trusted publishing, the same release workf
 To make automated publishing work, you still need to configure each registry once:
 
 1. PyPI:
-Create the `dcel-map` project on PyPI, then add a Trusted Publisher for this GitHub repository and the workflow file `release.yml`.
+Create the `dcel-map-generator` project on PyPI, then add a Trusted Publisher for this GitHub repository and the workflow file `release.yml`.
 
 2. npm:
 Create the `@alonso-cancino/dcel-map-frontend` package on npm, then add a Trusted Publisher for this GitHub repository and the workflow file `release.yml`.
