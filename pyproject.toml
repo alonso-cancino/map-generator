@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dcel-map-generator"
-version = "0.2.0"
+version = "0.2.1"
 description = "Generate a leaf-level DCEL map from a hierarchical zone tree"
 requires-python = ">=3.11"
 dependencies = [
