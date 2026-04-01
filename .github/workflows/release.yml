@@ -159,9 +159,9 @@ jobs:
           path: release-artifacts
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: Resolve frontend package tarball
@@ -177,4 +177,4 @@ jobs:
           echo "path=./${tarballs[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Publish renderer package to npm
-        run: npm publish "${{ steps.frontend-package.outputs.path }}" --access public
+        run: npm publish "${{ steps.frontend-package.outputs.path }}" --access public --provenance
