@@ -29,6 +29,7 @@ def generate_map_artifacts(
     land_fraction: float = 0.40,
     noise_exponent: float = 2.3,
     warp_strength: float = 0.10,
+    split_mode: str = "contour_guided",
     quiet: bool = False,
     blob_radius: float = 0.5,
     disk_radius: int | None = None,
@@ -51,6 +52,7 @@ def generate_map_artifacts(
         land_fraction=land_fraction,
         noise_exponent=noise_exponent,
         warp_strength=warp_strength,
+        split_mode=split_mode,
     )
     dcel, report = result.dcel, result.report
     report["tree_stats_loaded"] = bool(tree_stats)
@@ -75,6 +77,7 @@ def generate_dcel(
     land_fraction: float = 0.40,
     noise_exponent: float = 2.3,
     warp_strength: float = 0.10,
+    split_mode: str = "contour_guided",
     quiet: bool = False,
     blob_radius: float = 0.5,
     disk_radius: int | None = None,
@@ -90,6 +93,7 @@ def generate_dcel(
         land_fraction=land_fraction,
         noise_exponent=noise_exponent,
         warp_strength=warp_strength,
+        split_mode=split_mode,
         quiet=quiet,
         blob_radius=blob_radius,
         disk_radius=disk_radius,
@@ -107,6 +111,7 @@ def generate_frontend_bundle(
     land_fraction: float = 0.40,
     noise_exponent: float = 2.3,
     warp_strength: float = 0.10,
+    split_mode: str = "contour_guided",
     quiet: bool = False,
     blob_radius: float = 0.5,
     disk_radius: int | None = None,
@@ -122,6 +127,7 @@ def generate_frontend_bundle(
         land_fraction=land_fraction,
         noise_exponent=noise_exponent,
         warp_strength=warp_strength,
+        split_mode=split_mode,
         quiet=quiet,
         blob_radius=blob_radius,
         disk_radius=disk_radius,

@@ -71,6 +71,12 @@ def main() -> None:
         help="Domain-warp amplitude as fraction of resolution (default: 0.10)",
     )
     parser.add_argument(
+        "--split-mode",
+        choices=["seeded", "contour_guided", "field_guided"],
+        default="contour_guided",
+        help="Internal region split strategy (default: contour_guided)",
+    )
+    parser.add_argument(
         "--canvas-size",
         type=float,
         default=1.0,
@@ -157,6 +163,7 @@ def main() -> None:
             land_fraction=args.land_fraction,
             noise_exponent=args.noise_exponent,
             warp_strength=args.warp_strength,
+            split_mode=args.split_mode,
             quiet=args.quiet,
             blob_radius=args.blob_radius,
             disk_radius=args.disk_radius,

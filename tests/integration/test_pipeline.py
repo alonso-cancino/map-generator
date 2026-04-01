@@ -82,4 +82,5 @@ def test_smallest_leaf_is_not_tiny_relative_to_mean(pipeline_output):
 def test_allocator_reports_weighted_target_strategy(pipeline_output):
     _, report = pipeline_output
 
-    assert report["target_strategy"] == "subtree_leaf_weighted_with_parent_floor"
+    assert report["target_strategy"] == "subtree_leaf_weighted_with_parent_floor:contour_guided"
+    assert report["split_mode"] == "contour_guided"
