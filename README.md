@@ -12,6 +12,15 @@ This repo is the reusable core. Domain-specific map projects can keep their own 
 
 ![Atlantis demo map](docs/atlantis-map.png)
 
+## Packages
+
+This project publishes two packages:
+
+| Package | Registry | Docs |
+|---|---|---|
+| [`dcel-map-generator`](https://pypi.org/project/dcel-map-generator/) | PyPI | [dcel_builder/README.md](dcel_builder/README.md) |
+| [`@alonso-cancino/dcel-map-frontend`](https://www.npmjs.com/package/@alonso-cancino/dcel-map-frontend) | npm | [frontend/README.md](frontend/README.md) |
+
 ## What It Does
 
 The pipeline is tree-first:
@@ -76,17 +85,13 @@ The bundled example describes a three-level fantasy continent:
 - major regions such as `Aurelia Reach`, `Tidehollow`, `Cinder Crown`, `Mistwood`
 - smaller subregions and leaf territories beneath them
 
-The tracked demo inputs live in [`examples/atlantis`](/home/alosc/proyectos/map/examples/atlantis). Private or domain-specific datasets can stay in ignored folders such as `local/`.
+The tracked demo inputs live in [`examples/atlantis`](examples/atlantis). Private or domain-specific datasets can stay in ignored folders such as `local/`.
 
 ## Outputs
 
 - `dcel_map.json`: serialized DCEL
 - `docs/atlantis-map.png`: static render
 - `frontend/public/map_bundle.json`: interactive bundle consumed by the frontend
-
-## GitHub Pages Demo
-
-The frontend is configured for GitHub Pages static hosting. A workflow in `.github/workflows/deploy-pages.yml` builds `frontend/` and publishes the interactive demo using the bundled Atlantis example.
 
 ## Versioning
 
@@ -111,27 +116,10 @@ Each release publishes consumable artifacts:
 - the Atlantis example inputs as `atlantis-example-inputs.tar.gz`
 - the demo screenshot, `atlantis-map.png`
 
-You can consume the renderer package from npm by installing the published tarball, or later from the npm registry once it is published there. The library entrypoint exports `MapView`, `loadBundle`, `parseBundle`, and the bundle/type definitions.
-
 When the repository is configured for trusted publishing, the same release workflow also publishes:
 
 - the Python package to PyPI
 - the renderer package to npm
-
-### One-time registry setup
-
-To make automated publishing work, you still need to configure each registry once:
-
-1. PyPI:
-Create the `dcel-map-generator` project on PyPI, then add a Trusted Publisher for this GitHub repository and the workflow file `release.yml`.
-
-2. npm:
-Create the `@alonso-cancino/dcel-map-frontend` package on npm, then add a Trusted Publisher for this GitHub repository and the workflow file `release.yml`.
-
-3. GitHub:
-If you want deployment protection, create `pypi` and `npm` environments in the repository settings to match the workflow.
-
-After that, pushing to `main` will create the next semantic version release and publish both packages automatically.
 
 ## Development
 

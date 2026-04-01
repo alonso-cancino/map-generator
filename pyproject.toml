@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "dcel-map-generator"
 version = "0.6.2"
 description = "Generate a leaf-level DCEL map from a hierarchical zone tree"
-readme = "README.md"
+readme = "dcel_builder/README.md"
 requires-python = ">=3.11"
 dependencies = [
     "matplotlib>=3.10.8",
