@@ -53,6 +53,7 @@ jobs:
           fi
           git tag "v${{ steps.semver.outputs.version }}"
           git push origin main --follow-tags
+          git push origin "v${{ steps.semver.outputs.version }}"
 
       - name: Trigger release workflow
         if: steps.semver.outputs.changed == 'true'
