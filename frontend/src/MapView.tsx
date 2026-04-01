@@ -1,12 +1,14 @@
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
 import * as d3 from "d3";
 import { animationClassForZone } from "./animations";
-import type { BorderRecord, FrontendBundle, ZoneRecord } from "./types";
-
-interface MapViewProps {
-  bundle: FrontendBundle;
-}
+import type {
+  BorderRecord,
+  FrontendBundle,
+  MapRenderConfig,
+  MapViewProps,
+  ZoneRecord,
+} from "./types";
 
 interface ViewportSize {
   width: number;
@@ -19,27 +21,49 @@ interface PointerPosition {
 }
 
 const PADDING = 48;
+const DEFAULT_RENDER_CONFIG: MapRenderConfig = {
+  detailCommitMode: "animation-frame",
+  interactionSettleMs: 80,
+  disableEffectsWhileInteracting: true,
+};
 
-export function MapView({ bundle }: MapViewProps) {
+export function MapView({ bundle, renderConfig }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const rootLayerRef = useRef<SVGGElement | null>(null);
   const regionElementsRef = useRef(new Map<number, SVGPathElement>());
   const hoverArmedRef = useRef(false);
   const initialViewAppliedRef = useRef(false);
+  const latestTransformRef = useRef(d3.zoomIdentity);
+  const animationFrameRef = useRef<number | null>(null);
+  const settleTimeoutRef = useRef<number | null>(null);
   const [viewport, setViewport] = useState<ViewportSize>({ width: 960, height: 720 });
-  const [zoomTransform, setZoomTransform] = useState(d3.zoomIdentity);
+  const [committedTransform, setCommittedTransform] = useState(d3.zoomIdentity);
+  const [isInteracting, setIsInteracting] = useState(false);
   const minimumDepth = minVisibleDepth(bundle);
   const [hoveredZoneId, setHoveredZoneId] = useState<number | null>(null);
   const [pointerPosition, setPointerPosition] = useState<PointerPosition | null>(null);
   const initialFocusZoneId = firstZoneAtDepth(bundle, minimumDepth) ?? bundle.rootId;
   const [focusedZoneId, setFocusedZoneId] = useState<number | null>(null);
-  const visibleZones = resolveVisibleZones(bundle, zoomTransform.k, viewport);
+  const visibleZones = resolveVisibleZones(bundle, committedTransform.k, viewport);
   const visibleZoneIds = new Set(visibleZones.map((zone) => zone.id));
   const visibleBorders = bundle.borders.filter(
     (border) => visibleZoneIds.has(border.zoneIds[0]) && visibleZoneIds.has(border.zoneIds[1]),
   );
   const hoveredZone = hoveredZoneId === null ? null : bundle.zones.get(hoveredZoneId) ?? null;
+  const resolvedRenderConfig = resolveRenderConfig(renderConfig);
+
+  useEffect(() => {
+    initialViewAppliedRef.current = false;
+    latestTransformRef.current = d3.zoomIdentity;
+    setCommittedTransform(d3.zoomIdentity);
+    setFocusedZoneId(null);
+    setHoveredZoneId(null);
+    setPointerPosition(null);
+    setIsInteracting(false);
+    regionElementsRef.current.clear();
+  }, [bundle]);
 
   useEffect(() => {
     if (hoveredZoneId !== null && !visibleZoneIds.has(hoveredZoneId)) {
@@ -69,20 +93,48 @@ export function MapView({ bundle }: MapViewProps) {
     if (svgRef.current === null) {
       return;
     }
+
     const selection = d3.select(svgRef.current);
     const zoomBehavior = d3
       .zoom<SVGSVGElement, unknown>()
       .scaleExtent([1, Math.max(2 ** (bundle.maxDepth + 2), 8)])
+      .on("start", () => {
+        clearSettleTimeout(settleTimeoutRef);
+        setIsInteracting(true);
+      })
       .on("zoom", (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
-        setZoomTransform(event.transform);
+        latestTransformRef.current = event.transform;
+        applyLiveTransform(rootLayerRef.current, event.transform);
+        scheduleCommittedTransform(
+          latestTransformRef,
+          resolvedRenderConfig,
+          animationFrameRef,
+          settleTimeoutRef,
+          setCommittedTransform,
+          setIsInteracting,
+        );
+      })
+      .on("end", (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
+        latestTransformRef.current = event.transform;
+        applyLiveTransform(rootLayerRef.current, event.transform);
+        flushCommittedTransform(
+          event.transform,
+          animationFrameRef,
+          settleTimeoutRef,
+          resolvedRenderConfig,
+          setCommittedTransform,
+          setIsInteracting,
+        );
       });
 
     zoomRef.current = zoomBehavior;
     selection.call(zoomBehavior);
+
     return () => {
       selection.on(".zoom", null);
+      clearScheduledWork(animationFrameRef, settleTimeoutRef);
     };
-  }, [bundle]);
+  }, [bundle, resolvedRenderConfig]);
 
   useEffect(() => {
     if (
@@ -113,10 +165,13 @@ export function MapView({ bundle }: MapViewProps) {
       return;
     }
     const svg = d3.select(svgRef.current);
-    svg.attr("viewBox", `0 0 ${viewport.width} ${viewport.height}`);
+    svg
+      .attr("viewBox", `0 0 ${viewport.width} ${viewport.height}`)
+      .attr("data-interacting", isInteracting ? "true" : "false");
 
     const rootLayer = ensureSvgLayer(svg, "root-layer");
-    rootLayer.attr("transform", zoomTransform.toString());
+    rootLayerRef.current = rootLayer.node();
+    applyLiveTransform(rootLayerRef.current, latestTransformRef.current);
 
     const sceneLayer = ensureGroupLayer(rootLayer, "scene-layer");
     sceneLayer.attr("transform", baseSceneTransform(viewport));
@@ -143,7 +198,9 @@ export function MapView({ bundle }: MapViewProps) {
       .attr("d", (datum: ZoneRecord) => datum.path)
       .attr("data-zone-id", (datum: ZoneRecord) => String(datum.id))
       .attr("fill", (datum: ZoneRecord) => zoneColor(datum.id))
-      .attr("class", (datum: ZoneRecord) => zoneClassName(datum, hoveredZoneId, focusedZoneId))
+      .attr("class", (datum: ZoneRecord) =>
+        zoneClassName(datum, hoveredZoneId, focusedZoneId, isInteracting, resolvedRenderConfig),
+      )
       .each(function cacheRegionElement(datum: ZoneRecord) {
         regionElementsRef.current.set(datum.id, this);
       })
@@ -176,7 +233,13 @@ export function MapView({ bundle }: MapViewProps) {
       )
       .attr("d", (datum: BorderRecord) => datum.path)
       .attr("class", (datum: BorderRecord) =>
-        borderClassName(datum, hoveredZoneId, focusedZoneId),
+        borderClassName(
+          datum,
+          hoveredZoneId,
+          focusedZoneId,
+          isInteracting,
+          resolvedRenderConfig,
+        ),
       );
 
     const activeZoneId = hoveredZoneId ?? focusedZoneId;
@@ -203,7 +266,13 @@ export function MapView({ bundle }: MapViewProps) {
       )
       .attr("d", (datum: ZoneRecord) => datum.path)
       .attr("class", (datum: ZoneRecord) =>
-        activeOutlineClassName(datum, hoveredZoneId, focusedZoneId),
+        activeOutlineClassName(
+          datum,
+          hoveredZoneId,
+          focusedZoneId,
+          isInteracting,
+          resolvedRenderConfig,
+        ),
       );
 
     svg
@@ -231,7 +300,16 @@ export function MapView({ bundle }: MapViewProps) {
     return () => {
       svg.on("mousemove.hoverhit", null).on("mouseleave.hoverhit", null);
     };
-  }, [bundle, focusedZoneId, hoveredZoneId, viewport, visibleBorders, visibleZones, zoomTransform]);
+  }, [
+    bundle,
+    focusedZoneId,
+    hoveredZoneId,
+    isInteracting,
+    resolvedRenderConfig,
+    viewport,
+    visibleBorders,
+    visibleZones,
+  ]);
 
   return (
     <div className="map-shell">
@@ -288,6 +366,87 @@ function ensureGroupLayer(
   return selection.append("g").attr("class", className);
 }
 
+function applyLiveTransform(layer: SVGGElement | null, transform: d3.ZoomTransform) {
+  if (layer !== null) {
+    d3.select(layer).attr("transform", transform.toString());
+  }
+}
+
+function resolveRenderConfig(
+  renderConfig: Partial<MapRenderConfig> | undefined,
+): MapRenderConfig {
+  return {
+    ...DEFAULT_RENDER_CONFIG,
+    ...renderConfig,
+  };
+}
+
+function clearScheduledWork(
+  animationFrameRef: MutableRefObject<number | null>,
+  settleTimeoutRef: MutableRefObject<number | null>,
+) {
+  if (animationFrameRef.current !== null) {
+    window.cancelAnimationFrame(animationFrameRef.current);
+    animationFrameRef.current = null;
+  }
+  clearSettleTimeout(settleTimeoutRef);
+}
+
+function clearSettleTimeout(settleTimeoutRef: MutableRefObject<number | null>) {
+  if (settleTimeoutRef.current !== null) {
+    window.clearTimeout(settleTimeoutRef.current);
+    settleTimeoutRef.current = null;
+  }
+}
+
+function scheduleCommittedTransform(
+  latestTransformRef: MutableRefObject<d3.ZoomTransform>,
+  renderConfig: MapRenderConfig,
+  animationFrameRef: MutableRefObject<number | null>,
+  settleTimeoutRef: MutableRefObject<number | null>,
+  setCommittedTransform: Dispatch<SetStateAction<d3.ZoomTransform>>,
+  setIsInteracting: Dispatch<SetStateAction<boolean>>,
+) {
+  if (renderConfig.detailCommitMode === "animation-frame" && animationFrameRef.current === null) {
+    animationFrameRef.current = window.requestAnimationFrame(() => {
+      animationFrameRef.current = null;
+      setCommittedTransform(latestTransformRef.current);
+    });
+  }
+
+  clearSettleTimeout(settleTimeoutRef);
+  settleTimeoutRef.current = window.setTimeout(() => {
+    settleTimeoutRef.current = null;
+    setCommittedTransform(latestTransformRef.current);
+    setIsInteracting(false);
+  }, renderConfig.interactionSettleMs);
+}
+
+function flushCommittedTransform(
+  transform: d3.ZoomTransform,
+  animationFrameRef: MutableRefObject<number | null>,
+  settleTimeoutRef: MutableRefObject<number | null>,
+  renderConfig: MapRenderConfig,
+  setCommittedTransform: Dispatch<SetStateAction<d3.ZoomTransform>>,
+  setIsInteracting: Dispatch<SetStateAction<boolean>>,
+) {
+  if (animationFrameRef.current !== null) {
+    window.cancelAnimationFrame(animationFrameRef.current);
+    animationFrameRef.current = null;
+  }
+  clearSettleTimeout(settleTimeoutRef);
+
+  setCommittedTransform(transform);
+  if (renderConfig.interactionSettleMs <= 0) {
+    setIsInteracting(false);
+    return;
+  }
+  settleTimeoutRef.current = window.setTimeout(() => {
+    settleTimeoutRef.current = null;
+    setIsInteracting(false);
+  }, renderConfig.interactionSettleMs);
+}
+
 function baseSceneTransform(viewport: ViewportSize): string {
   const scale = Math.min(viewport.width, viewport.height);
   const offsetX = (viewport.width - scale) / 2;
@@ -295,10 +454,7 @@ function baseSceneTransform(viewport: ViewportSize): string {
   return `translate(${offsetX}, ${offsetY + scale}) scale(${scale}, ${-scale})`;
 }
 
-function fitZoneTransform(
-  zone: ZoneRecord,
-  viewport: ViewportSize,
-): d3.ZoomTransform {
+function fitZoneTransform(zone: ZoneRecord, viewport: ViewportSize): d3.ZoomTransform {
   return fitBBoxTransform(zone.bbox, viewport);
 }
 
@@ -315,10 +471,9 @@ function fitBBoxTransform(
     (viewport.width - PADDING * 2) / bboxWidth,
     (viewport.height - PADDING * 2) / bboxHeight,
   );
-  const scale = fitScale;
   return d3.zoomIdentity
-    .translate(viewport.width / 2 - scale * cx, viewport.height / 2 - scale * cy)
-    .scale(scale);
+    .translate(viewport.width / 2 - fitScale * cx, viewport.height / 2 - fitScale * cy)
+    .scale(fitScale);
 }
 
 function projectBBox(bbox: [number, number, number, number], viewport: ViewportSize) {
@@ -364,6 +519,8 @@ function zoneClassName(
   zone: ZoneRecord,
   hoveredZoneId: number | null,
   focusedZoneId: number | null,
+  isInteracting: boolean,
+  renderConfig: MapRenderConfig,
 ): string {
   const classes = ["region", animationClassForZone(zone.id)];
   if (hoveredZoneId === zone.id) {
@@ -372,6 +529,9 @@ function zoneClassName(
   if (focusedZoneId === zone.id) {
     classes.push("is-focused");
   }
+  if (isInteracting && renderConfig.disableEffectsWhileInteracting) {
+    classes.push("is-interacting");
+  }
   return classes.join(" ");
 }
 
@@ -379,6 +539,8 @@ function borderClassName(
   border: BorderRecord,
   hoveredZoneId: number | null,
   focusedZoneId: number | null,
+  isInteracting: boolean,
+  renderConfig: MapRenderConfig,
 ): string {
   const classes = ["region-border"];
   if (hoveredZoneId !== null && border.zoneIds.includes(hoveredZoneId)) {
@@ -387,6 +549,9 @@ function borderClassName(
   if (focusedZoneId !== null && border.zoneIds.includes(focusedZoneId)) {
     classes.push("is-focused");
   }
+  if (isInteracting && renderConfig.disableEffectsWhileInteracting) {
+    classes.push("is-interacting");
+  }
   return classes.join(" ");
 }
 
@@ -394,12 +559,17 @@ function activeOutlineClassName(
   zone: ZoneRecord,
   hoveredZoneId: number | null,
   focusedZoneId: number | null,
+  isInteracting: boolean,
+  renderConfig: MapRenderConfig,
 ): string {
   const classes = ["active-outline"];
   if (hoveredZoneId === zone.id) {
     classes.push("is-hovered");
   } else if (focusedZoneId === zone.id) {
     classes.push("is-focused");
+  }
+  if (isInteracting && renderConfig.disableEffectsWhileInteracting) {
+    classes.push("is-interacting");
   }
   return classes.join(" ");
 }
@@ -501,7 +671,6 @@ function hitTestVisibleZone(
   }
   return null;
 }
-
 
 function minVisibleDepth(bundle: FrontendBundle): number {
   return bundle.maxDepth >= 1 ? 1 : 0;

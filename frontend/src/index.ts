@@ -5,6 +5,8 @@ export { loadBundle, parseBundle } from "./bundle";
 export type {
   BorderRecord,
   FrontendBundle,
+  MapRenderConfig,
+  MapViewProps,
   RawBorderRecord,
   RawFrontendBundle,
   RawZoneRecord,

@@ -55,3 +55,16 @@ export interface FrontendBundle {
   borders: BorderRecord[];
   zones: Map<number, ZoneRecord>;
 }
+
+export type DetailCommitMode = "animation-frame" | "interaction-end";
+
+export interface MapRenderConfig {
+  detailCommitMode: DetailCommitMode;
+  interactionSettleMs: number;
+  disableEffectsWhileInteracting: boolean;
+}
+
+export interface MapViewProps {
+  bundle: FrontendBundle;
+  renderConfig?: Partial<MapRenderConfig>;
+}
