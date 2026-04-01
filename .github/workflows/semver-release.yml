@@ -54,4 +54,15 @@ jobs:
         if: steps.semver.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run release.yml --ref "v${{ steps.semver.outputs.version }}"
+        run: |
+          TAG="v${{ steps.semver.outputs.version }}"
+          for i in 1 2 3 4 5; do
+            if gh workflow run release.yml --ref "$TAG"; then
+              echo "Dispatched release for $TAG"
+              exit 0
+            fi
+            echo "Ref $TAG not ready yet, retrying in ${i}s..."
+            sleep "$i"
+          done
+          echo "Failed to dispatch release after retries"
+          exit 1
