@@ -177,4 +177,4 @@ jobs:
           echo "path=./${tarballs[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Publish renderer package to npm
-        run: npm publish "${{ steps.frontend-package.outputs.path }}" --access public --provenance
+        run: npm publish "${{ steps.frontend-package.outputs.path }}" --access public
