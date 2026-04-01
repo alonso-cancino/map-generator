@@ -51,6 +51,7 @@ def build_leaf_dcel_from_tree(
     land_fraction: float,
     noise_exponent: float,
     warp_strength: float,
+    split_mode: str = "seeded",
 ) -> HierarchyBuildResult:
     """Generate a recursive leaf tessellation and convert it to a DCEL."""
     master_seed = 42 if seed is None else int(seed)
@@ -83,6 +84,7 @@ def build_leaf_dcel_from_tree(
                 master_seed=master_seed,
                 split_reports=split_reports,
                 subtree_leaf_counts=subtree_leaf_counts,
+                split_mode=split_mode,
             )
             break
         except ResolutionTooLowError:
@@ -114,7 +116,8 @@ def build_leaf_dcel_from_tree(
         "leaf_pixel_counts": leaf_pixel_counts,
         "leaf_area_stats": _area_stats(np.array(interior_areas, dtype=np.float64)),
         "min_size_ratio": MIN_CHILD_RATIO,
-        "target_strategy": "subtree_leaf_weighted_with_parent_floor",
+        "target_strategy": f"subtree_leaf_weighted_with_parent_floor:{split_mode}",
+        "split_mode": split_mode,
         "split_reports": split_reports,
         "smallest_leaf_pixels": min(leaf_pixel_counts.values(), default=0),
     }
@@ -136,6 +139,7 @@ def _partition_node(
     master_seed: int,
     split_reports: list[dict[str, int | float]],
     subtree_leaf_counts: dict[int, int],
+    split_mode: str,
 ) -> None:
     children = tree.children[node_id]
     if not children:
@@ -148,6 +152,8 @@ def _partition_node(
         children=children,
         child_leaf_counts=[subtree_leaf_counts[child] for child in children],
         split_seed=derive_seed(master_seed, node_id, "split"),
+        split_mode=split_mode,
+        depth=tree.depth[node_id],
     )
     split_reports.append(
         {
@@ -169,6 +175,7 @@ def _partition_node(
             master_seed=master_seed,
             split_reports=split_reports,
             subtree_leaf_counts=subtree_leaf_counts,
+            split_mode=split_mode,
         )
 
 
@@ -177,6 +184,8 @@ def _split_mask_among_children(
     children: tuple[int, ...],
     child_leaf_counts: list[int],
     split_seed: int,
+    split_mode: str = "seeded",
+    depth: int = 0,
 ) -> dict[int, np.ndarray]:
     total_pixels = int(parent_mask.sum())
     if total_pixels < len(children):
@@ -185,12 +194,33 @@ def _split_mask_among_children(
         )
 
     rng = np.random.default_rng(split_seed % (2**63))
-    seed_pixels = _select_seed_pixels(parent_mask, len(children), rng)
     targets = _weighted_targets(total_pixels, child_leaf_counts)
     ownership = np.full(parent_mask.shape, -1, dtype=np.int16)
     frontier: dict[int, list[tuple[float, int, int]]] = {idx: [] for idx in range(len(children))}
     assigned = [0 for _ in children]
     noise_field = spectral_noise_2d(parent_mask.shape[0], 2.6, derive_seed(split_seed, "noise"))
+    guide_field = None
+    guide_gradient = None
+    contour_cost = None
+    candidate_cost = _candidate_cost_seeded
+    if split_mode == "contour_guided":
+        contour_cost = _split_contour_cost_field(parent_mask.shape[0], split_seed, depth)
+        seed_pixels = _select_seed_pixels_contour(
+            parent_mask,
+            len(children),
+            rng,
+            contour_cost,
+            depth=depth,
+        )
+        candidate_cost = _candidate_cost_contour_guided
+    elif split_mode == "field_guided":
+        seed_pixels = _select_seed_pixels(parent_mask, len(children), rng)
+        guide_field, guide_gradient = _split_guide_field(parent_mask.shape[0], split_seed)
+        candidate_cost = _candidate_cost_field_guided
+    elif split_mode == "seeded":
+        seed_pixels = _select_seed_pixels(parent_mask, len(children), rng)
+    else:
+        raise ValueError(f"Unknown split mode: {split_mode}")
     tie_break = 0
 
     for idx, (row, col) in enumerate(seed_pixels):
@@ -204,7 +234,21 @@ def _split_mask_among_children(
             tie_break += 1
             heapq.heappush(
                 frontier[idx],
-                (_candidate_cost(nr, nc, seed_pixels[idx], noise_field), tie_break, nr, nc),
+                (
+                    candidate_cost(
+                        nr,
+                        nc,
+                        seed_pixels[idx],
+                        noise_field,
+                        guide_field=guide_field,
+                        guide_gradient=guide_gradient,
+                        contour_cost=contour_cost,
+                        depth=depth,
+                    ),
+                    tie_break,
+                    nr,
+                    nc,
+                ),
             )
 
     remaining = total_pixels - len(children)
@@ -241,7 +285,16 @@ def _split_mask_among_children(
                 heapq.heappush(
                     frontier[child_idx],
                     (
-                        _candidate_cost(nr, nc, seed_pixels[child_idx], noise_field),
+                        candidate_cost(
+                            nr,
+                            nc,
+                            seed_pixels[child_idx],
+                            noise_field,
+                            guide_field=guide_field,
+                            guide_gradient=guide_gradient,
+                            contour_cost=contour_cost,
+                            depth=depth,
+                        ),
                         tie_break,
                         nr,
                         nc,
@@ -299,6 +352,70 @@ def _select_seed_pixels(
                 continue
             min_sq_dist = min((row - cr) ** 2 + (col - cc) ** 2 for cr, cc in chosen)
             score = min_sq_dist * (1.0 + 0.25 * boundary_distance[row, col])
+            if score > best_score:
+                best_score = score
+                best_coord = coord
+        assert best_coord is not None
+        chosen.append(best_coord)
+
+    return chosen
+
+
+def _select_seed_pixels_contour(
+    mask: np.ndarray,
+    count: int,
+    rng: np.random.Generator,
+    contour_cost: np.ndarray,
+    *,
+    depth: int,
+) -> list[tuple[int, int]]:
+    coords = np.argwhere(mask)
+    if coords.shape[0] < count:
+        raise ValueError("Not enough land pixels to place child seeds.")
+
+    if coords.shape[0] > 5000:
+        sample_idx = rng.choice(coords.shape[0], size=5000, replace=False)
+        coords = coords[sample_idx]
+
+    boundary_distance = distance_transform_edt(mask)
+    boundary_values = np.array(
+        [boundary_distance[row, col] for row, col in coords],
+        dtype=np.float64,
+    )
+    if float(boundary_values.max()) > 0:
+        boundary_values = boundary_values / float(boundary_values.max())
+    contour_values = np.array([contour_cost[row, col] for row, col in coords], dtype=np.float64)
+
+    # Prefer seeds away from the deepest center and away from the hard coastline,
+    # while still sitting near low-cost contour channels.
+    target_band = 0.34 if depth == 0 else 0.40 if depth == 1 else 0.46
+    middle_band = 1.0 - np.abs(boundary_values - target_band) / max(target_band, 1e-6)
+    middle_band = np.clip(middle_band, 0.0, 1.0)
+    contour_weight = 0.55 if depth == 0 else 0.40 if depth == 1 else 0.25
+    first_scores = middle_band * (1.0 - contour_weight) + (1.0 - contour_values) * contour_weight
+    first_scores += rng.random(len(coords)) * 0.15
+
+    chosen: list[tuple[int, int]] = []
+    first_idx = int(np.argmax(first_scores))
+    chosen.append(tuple(int(v) for v in coords[first_idx]))
+
+    for _ in range(1, count):
+        best_score = -math.inf
+        best_coord = None
+        for coord_idx, (row, col) in enumerate(coords):
+            coord = (int(row), int(col))
+            if coord in chosen:
+                continue
+            min_sq_dist = min((row - cr) ** 2 + (col - cc) ** 2 for cr, cc in chosen)
+            spacing = math.sqrt(min_sq_dist)
+            spacing_weight = 1.25 if depth == 0 else 1.0 if depth == 1 else 0.8
+            band_weight = 15.0 if depth == 0 else 11.0 if depth == 1 else 8.0
+            contour_score_weight = 12.0 if depth == 0 else 8.0 if depth == 1 else 5.0
+            score = (
+                spacing * spacing_weight
+                + middle_band[coord_idx] * band_weight
+                + (1.0 - contour_values[coord_idx]) * contour_score_weight
+            )
             if score > best_score:
                 best_score = score
                 best_coord = coord
@@ -413,6 +530,130 @@ def _candidate_cost(
 ) -> float:
     distance = math.hypot(row - seed[0], col - seed[1])
     return distance * 0.03 + float(noise_field[row, col])
+
+
+def _candidate_cost_seeded(
+    row: int,
+    col: int,
+    seed: tuple[int, int],
+    noise_field: np.ndarray,
+    *,
+    guide_field: np.ndarray | None = None,
+    guide_gradient: np.ndarray | None = None,
+    contour_cost: np.ndarray | None = None,
+    depth: int = 0,
+) -> float:
+    del guide_field
+    del guide_gradient
+    del contour_cost
+    del depth
+    return _candidate_cost(row, col, seed, noise_field)
+
+
+def _candidate_cost_field_guided(
+    row: int,
+    col: int,
+    seed: tuple[int, int],
+    noise_field: np.ndarray,
+    *,
+    guide_field: np.ndarray | None = None,
+    guide_gradient: np.ndarray | None = None,
+    contour_cost: np.ndarray | None = None,
+    depth: int = 0,
+) -> float:
+    del contour_cost
+    del depth
+    if guide_field is None or guide_gradient is None:
+        raise ValueError("Field-guided split mode requires guide field inputs.")
+    distance = math.hypot(row - seed[0], col - seed[1])
+    local_noise = float(noise_field[row, col]) - 0.5
+    contour_bias = abs(float(guide_field[row, col]) - 0.5)
+    gradient_bias = 1.0 - float(guide_gradient[row, col])
+    return distance * 0.02 + local_noise * 0.10 + contour_bias * 0.55 + gradient_bias * 0.35
+
+
+def _candidate_cost_contour_guided(
+    row: int,
+    col: int,
+    seed: tuple[int, int],
+    noise_field: np.ndarray,
+    *,
+    guide_field: np.ndarray | None = None,
+    guide_gradient: np.ndarray | None = None,
+    contour_cost: np.ndarray | None = None,
+    depth: int = 0,
+) -> float:
+    del guide_field
+    del guide_gradient
+    if contour_cost is None:
+        raise ValueError("Contour-guided split mode requires contour cost input.")
+    distance = math.hypot(row - seed[0], col - seed[1])
+    local_noise = abs(float(noise_field[row, col]) - 0.5)
+    channel_cost = float(contour_cost[row, col])
+    distance_weight = 0.008 if depth == 0 else 0.010 if depth == 1 else 0.013
+    channel_weight = 1.25 if depth == 0 else 0.95 if depth == 1 else 0.65
+    noise_weight = 0.04 if depth == 0 else 0.06 if depth == 1 else 0.09
+    return distance * distance_weight + channel_cost * channel_weight + local_noise * noise_weight
+
+
+def _split_contour_cost_field(
+    resolution: int,
+    split_seed: int,
+    depth: int,
+) -> np.ndarray:
+    border_seed = derive_seed(split_seed, "contour", "field")
+    border_noise = spectral_noise_2d(resolution, 2.7, border_seed)
+    sigma = (
+        resolution / 18.0
+        if depth == 0
+        else resolution / 28.0 if depth == 1 else resolution / 40.0
+    )
+    smooth = gaussian_filter(border_noise, sigma=max(sigma, 1.0))
+    smin = float(smooth.min())
+    smax = float(smooth.max())
+    if smax > smin:
+        smooth = (smooth - smin) / (smax - smin)
+    num_contours = 2.5 if depth == 0 else 4.0 if depth == 1 else 6.0
+    sharpness = 0.45 if depth == 0 else 0.55 if depth == 1 else 0.70
+    contour_channels = np.abs(np.sin(np.pi * num_contours * smooth))
+    return np.power(contour_channels, sharpness)
+
+
+def _split_guide_field(
+    resolution: int,
+    split_seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    base = spectral_noise_2d(resolution, 3.0, derive_seed(split_seed, "guide", "base"))
+    detail = spectral_noise_2d(resolution, 4.2, derive_seed(split_seed, "guide", "detail"))
+    warp_x = spectral_noise_2d(resolution, 3.4, derive_seed(split_seed, "guide", "warp_x"))
+    warp_y = spectral_noise_2d(resolution, 3.4, derive_seed(split_seed, "guide", "warp_y"))
+    field = _warp_field(0.7 * base + 0.3 * detail, resolution, 0.035, warp_x, warp_y)
+    grad_y, grad_x = np.gradient(field)
+    gradient = np.sqrt(grad_x**2 + grad_y**2)
+    if float(gradient.max()) > 0:
+        gradient = gradient / float(gradient.max())
+    return field, gradient
+
+
+def _warp_field(
+    heightmap: np.ndarray,
+    resolution: int,
+    warp_strength: float,
+    warp_x: np.ndarray,
+    warp_y: np.ndarray,
+) -> np.ndarray:
+    scale = 2 * warp_strength * resolution
+    offset_x = (warp_x - 0.5) * scale
+    offset_y = (warp_y - 0.5) * scale
+    rows, cols = np.mgrid[0:resolution, 0:resolution]
+    return np.asarray(
+        map_coordinates(
+            heightmap,
+            [(rows + offset_y) % resolution, (cols + offset_x) % resolution],
+            order=3,
+            mode="wrap",
+        )
+    )
 
 
 def _touches_region(ownership: np.ndarray, row: int, col: int, child_idx: int) -> bool:
