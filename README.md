@@ -21,6 +21,8 @@ This project publishes two packages:
 | [`dcel-map-generator`](https://pypi.org/project/dcel-map-generator/) | PyPI | [dcel_builder/README.md](dcel_builder/README.md) |
 | [`@alonso-cancino/dcel-map-frontend`](https://www.npmjs.com/package/@alonso-cancino/dcel-map-frontend) | npm | [frontend/README.md](frontend/README.md) |
 
+The frontend component supports configurable color palettes, SVG texture overlays, hover animation presets, and an optional resizable side panel. See the [frontend README](frontend/README.md) for full API docs.
+
 ## What It Does
 
 The pipeline is tree-first:

@@ -17,6 +17,8 @@ npm install @alonso-cancino/dcel-map-frontend
 
 ## Quick Example
 
+Minimal usage — just pass a bundle:
+
 ```tsx
 import { MapView, loadBundle } from "@alonso-cancino/dcel-map-frontend";
 import "@alonso-cancino/dcel-map-frontend/style.css";
@@ -35,9 +37,21 @@ function App() {
 }
 ```
 
+With theme and side panel:
+
+```tsx
+<MapView
+  bundle={bundle}
+  theme={{ palette: "parchment", texture: "crosshatch", hover: "glow" }}
+  panel={{ enabled: true, defaultState: "half", position: "right" }}
+  panelContent={<aside>Zone inspector</aside>}
+  onZoneClick={(zone) => console.log(zone.name)}
+/>
+```
+
 ## API
 
-### `<MapView bundle={bundle} />`
+### `<MapView />`
 
 The main React component. Renders an interactive SVG map with:
 
@@ -46,12 +60,20 @@ The main React component. Renders an interactive SVG map with:
 - Hover highlights with zone name tooltips
 - Smooth animated transitions between zoom levels
 - Responsive container sizing
+- Configurable color palettes, SVG textures, and hover animations
+- Optional resizable side panel
 
 **Props:**
 
 | Prop | Type | Description |
 |---|---|---|
 | `bundle` | `FrontendBundle` | Parsed map bundle (see `loadBundle` or `parseBundle`) |
+| `renderConfig` | `Partial<MapRenderConfig>` | Optional rendering behavior config |
+| `theme` | `MapTheme` | Optional theme config (palette, texture, hover) |
+| `panel` | `SidePanelConfig` | Optional side panel configuration |
+| `panelContent` | `React.ReactNode` | Content rendered inside the side panel |
+| `onZoneClick` | `(zone: ZoneRecord) => void` | Callback when a zone is clicked |
+| `onZoneHover` | `(zone: ZoneRecord \| null) => void` | Callback when the hovered zone changes |
 
 ### `loadBundle(path: string): Promise<FrontendBundle>`
 
@@ -69,6 +91,174 @@ Parse an already-loaded raw JSON object into a `FrontendBundle`. Useful when you
 import rawData from "./my-bundle.json";
 const bundle = parseBundle(rawData as RawFrontendBundle);
 ```
+
+### Theme
+
+The `theme` prop controls visual appearance. All fields are optional and default to the current look.
+
+```tsx
+<MapView
+  bundle={bundle}
+  theme={{
+    palette: "parchment",
+    texture: "dots",
+    textureOpacity: 0.2,
+    hover: "glow",
+  }}
+/>
+```
+
+#### Color Palettes
+
+Set `theme.palette` to a built-in name or a custom function:
+
+| Palette | Description |
+|---|---|
+| `"default"` | Full hue rotation (current behavior) |
+| `"parchment"` | Warm sepia tones |
+| `"forest"` | Greens and earth browns |
+| `"ocean"` | Blues and teals |
+| `"volcanic"` | Reds and dark oranges |
+| `"arctic"` | Cool grays and pale blues |
+
+Custom palette function:
+
+```tsx
+<MapView
+  bundle={bundle}
+  theme={{
+    palette: (zoneId, depth) => `hsl(${(zoneId * 30) % 360}, 60%, ${50 + depth * 5}%)`,
+  }}
+/>
+```
+
+#### SVG Textures
+
+Set `theme.texture` to a built-in name or a custom `SvgPatternDef`:
+
+| Texture | Description |
+|---|---|
+| `"none"` | No texture overlay (default) |
+| `"crosshatch"` | Diagonal crosshatch lines |
+| `"dots"` | Regular dot grid |
+| `"waves"` | Sinusoidal wave pattern |
+| `"parchment-noise"` | Irregular scattered marks |
+| `"stipple"` | Pseudo-random dot placement |
+
+`textureOpacity` controls the overlay intensity (0–1, default `0.15`).
+
+Custom texture:
+
+```tsx
+<MapView
+  bundle={bundle}
+  theme={{
+    texture: {
+      id: "my-pattern",
+      width: 10,
+      height: 10,
+      content: '<circle cx="5" cy="5" r="2" fill="currentColor" />',
+    },
+    textureOpacity: 0.1,
+  }}
+/>
+```
+
+#### Hover Animations
+
+Set `theme.hover` to a built-in preset or a custom animation:
+
+| Preset | Description |
+|---|---|
+| `"pulse"` | Opacity pulse with golden glow (default) |
+| `"glow"` | Expanding golden halo |
+| `"lift"` | Slight scale-up with shadow |
+| `"none"` | No hover animation |
+
+Custom hover animation:
+
+```tsx
+<MapView
+  bundle={bundle}
+  theme={{
+    hover: {
+      className: "my-hover",
+      keyframes: `
+        @keyframes myEffect {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.6; }
+        }
+        .region.my-hover.is-hovered {
+          animation: myEffect 1s ease infinite;
+        }
+      `,
+    },
+  }}
+/>
+```
+
+### Side Panel
+
+The `panel` prop enables a resizable side panel alongside the map. The map viewport automatically resizes to accommodate the panel.
+
+```tsx
+<MapView
+  bundle={bundle}
+  panel={{
+    enabled: true,
+    defaultState: "half",
+    position: "right",
+  }}
+  panelContent={<div>Zone details here</div>}
+/>
+```
+
+**`SidePanelConfig`:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `boolean` | — | Whether the panel is rendered |
+| `defaultState` | `PanelState` | `"hidden"` | Initial state (uncontrolled mode) |
+| `state` | `PanelState` | — | Controlled panel state |
+| `onStateChange` | `(state: PanelState) => void` | — | Called when the panel state changes |
+| `position` | `"left" \| "right"` | `"right"` | Which side the panel appears on |
+
+**`PanelState`:** `"hidden"` | `"half"` | `"full"`
+
+The panel supports both controlled and uncontrolled modes. Pass `state` to control it externally, or use `defaultState` to let the component manage its own state. A toggle button on the panel edge cycles through the three states.
+
+### Render Config
+
+The `renderConfig` prop controls rendering engine behavior:
+
+```tsx
+<MapView
+  bundle={bundle}
+  renderConfig={{
+    detailCommitMode: "animation-frame",
+    interactionSettleMs: 80,
+    disableEffectsWhileInteracting: true,
+  }}
+/>
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `detailCommitMode` | `"animation-frame" \| "interaction-end"` | `"animation-frame"` | When to commit viewport detail updates |
+| `interactionSettleMs` | `number` | `80` | Delay after interaction before settling |
+| `disableEffectsWhileInteracting` | `boolean` | `true` | Disable hover/focus effects during pan/zoom |
+
+### Event Callbacks
+
+```tsx
+<MapView
+  bundle={bundle}
+  onZoneClick={(zone) => console.log("Clicked:", zone.name)}
+  onZoneHover={(zone) => console.log("Hovered:", zone?.name ?? "none")}
+/>
+```
+
+Both callbacks receive a `ZoneRecord` (or `null` for `onZoneHover` when the pointer leaves all zones).
 
 ## TypeScript Types
 
@@ -117,6 +307,62 @@ interface BorderRecord {
   zoneIds: [number, number];
   path: string;              // SVG path data
 }
+```
+
+### `MapTheme`
+
+```ts
+interface MapTheme {
+  palette?: BuiltinPalette | ((zoneId: number, depth: number) => string);
+  texture?: BuiltinTexture | SvgPatternDef;
+  textureOpacity?: number;
+  hover?: BuiltinHoverPreset | CustomHoverAnimation;
+}
+```
+
+### `SvgPatternDef`
+
+```ts
+interface SvgPatternDef {
+  id: string;
+  width: number;
+  height: number;
+  content: string; // SVG markup for the pattern
+}
+```
+
+### `CustomHoverAnimation`
+
+```ts
+interface CustomHoverAnimation {
+  className: string;
+  keyframes?: string;
+  style?: Record<string, string>;
+}
+```
+
+### `SidePanelConfig`
+
+```ts
+interface SidePanelConfig {
+  enabled: boolean;
+  defaultState?: PanelState;
+  state?: PanelState;
+  onStateChange?: (state: PanelState) => void;
+  position?: "left" | "right";
+}
+```
+
+### Preset Constants
+
+The library exports arrays of available built-in options:
+
+```ts
+import {
+  BUILTIN_PALETTES,       // ["default", "parchment", "forest", "ocean", "volcanic", "arctic"]
+  BUILTIN_TEXTURES,       // ["none", "crosshatch", "dots", "waves", "parchment-noise", "stipple"]
+  BUILTIN_HOVER_PRESETS,  // ["pulse", "glow", "lift", "none"]
+} from "@alonso-cancino/dcel-map-frontend";
 ```
 
 ### Raw Types
