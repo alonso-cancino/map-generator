@@ -2,11 +2,15 @@ import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "reac
 import { useEffect, useRef, useState } from "react";
 import * as d3 from "d3";
 import { animationClassForZone } from "./animations";
+import { SidePanel } from "./SidePanel";
+import { resolveTheme } from "./theme";
 import type {
   BorderRecord,
   FrontendBundle,
   MapRenderConfig,
   MapViewProps,
+  ResolvedTheme,
+  SvgPatternDef,
   ZoneRecord,
 } from "./types";
 
@@ -27,7 +31,15 @@ const DEFAULT_RENDER_CONFIG: MapRenderConfig = {
   disableEffectsWhileInteracting: true,
 };
 
-export function MapView({ bundle, renderConfig }: MapViewProps) {
+export function MapView({
+  bundle,
+  renderConfig,
+  theme,
+  panel,
+  panelContent,
+  onZoneClick,
+  onZoneHover,
+}: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
@@ -53,6 +65,29 @@ export function MapView({ bundle, renderConfig }: MapViewProps) {
   );
   const hoveredZone = hoveredZoneId === null ? null : bundle.zones.get(hoveredZoneId) ?? null;
   const resolvedRenderConfig = resolveRenderConfig(renderConfig);
+  const resolvedTheme = resolveTheme(theme);
+
+  // Inject custom hover keyframes
+  useEffect(() => {
+    if (resolvedTheme.hoverKeyframes === null) {
+      return;
+    }
+    const style = document.createElement("style");
+    style.textContent = resolvedTheme.hoverKeyframes;
+    document.head.appendChild(style);
+    return () => {
+      document.head.removeChild(style);
+    };
+  }, [resolvedTheme.hoverKeyframes]);
+
+  // Fire onZoneHover callback
+  useEffect(() => {
+    if (onZoneHover === undefined) {
+      return;
+    }
+    const zone = hoveredZoneId === null ? null : bundle.zones.get(hoveredZoneId) ?? null;
+    onZoneHover(zone);
+  }, [hoveredZoneId, bundle, onZoneHover]);
 
   useEffect(() => {
     initialViewAppliedRef.current = false;
@@ -176,7 +211,11 @@ export function MapView({ bundle, renderConfig }: MapViewProps) {
     const sceneLayer = ensureGroupLayer(rootLayer, "scene-layer");
     sceneLayer.attr("transform", baseSceneTransform(viewport));
 
+    // Manage SVG <defs> for texture patterns
+    manageSvgDefs(svg, resolvedTheme);
+
     const fillLayer = ensureGroupLayer(sceneLayer, "fill-layer");
+    const textureLayer = ensureGroupLayer(sceneLayer, "texture-layer");
     const borderLayer = ensureGroupLayer(sceneLayer, "border-layer");
     const activeOutlineLayer = ensureGroupLayer(sceneLayer, "active-outline-layer");
 
@@ -197,15 +236,23 @@ export function MapView({ bundle, renderConfig }: MapViewProps) {
       )
       .attr("d", (datum: ZoneRecord) => datum.path)
       .attr("data-zone-id", (datum: ZoneRecord) => String(datum.id))
-      .attr("fill", (datum: ZoneRecord) => zoneColor(datum.id))
+      .attr("fill", (datum: ZoneRecord) => resolvedTheme.palette(datum.id, datum.depth))
       .attr("class", (datum: ZoneRecord) =>
-        zoneClassName(datum, hoveredZoneId, focusedZoneId, isInteracting, resolvedRenderConfig),
+        zoneClassName(
+          datum,
+          hoveredZoneId,
+          focusedZoneId,
+          isInteracting,
+          resolvedRenderConfig,
+          resolvedTheme,
+        ),
       )
       .each(function cacheRegionElement(datum: ZoneRecord) {
         regionElementsRef.current.set(datum.id, this);
       })
       .on("click", (_: MouseEvent, datum: ZoneRecord) => {
         focusZone(datum.id, bundle, viewport, svgRef, zoomRef, setFocusedZoneId);
+        onZoneClick?.(datum);
       });
 
     const currentVisibleZoneIds = new Set(visibleZones.map((zone) => zone.id));
@@ -214,6 +261,28 @@ export function MapView({ bundle, renderConfig }: MapViewProps) {
         regionElementsRef.current.delete(zoneId);
       }
     }
+
+    // Texture overlay layer
+    const textureData = resolvedTheme.texture !== null ? visibleZones : [];
+    const textureSelection = textureLayer
+      .selectAll<SVGPathElement, ZoneRecord>("path.texture-region")
+      .data(textureData, (datum) => datum.id);
+
+    textureSelection
+      .join(
+        (enter: d3.Selection<d3.EnterElement, ZoneRecord, SVGGElement, unknown>) =>
+          enter
+            .append("path")
+            .attr("class", "texture-region")
+            .attr("fill-rule", "evenodd")
+            .attr("vector-effect", "non-scaling-stroke")
+            .attr("pointer-events", "none"),
+        (update: d3.Selection<SVGPathElement, ZoneRecord, SVGGElement, unknown>) => update,
+        (exit: d3.Selection<SVGPathElement, ZoneRecord, SVGGElement, unknown>) => exit.remove(),
+      )
+      .attr("d", (datum: ZoneRecord) => datum.path)
+      .attr("fill", resolvedTheme.texture !== null ? `url(#${resolvedTheme.texture.id})` : "none")
+      .attr("opacity", resolvedTheme.textureOpacity);
 
     const borderSelection = borderLayer
       .selectAll<SVGPathElement, BorderRecord>("path.region-border")
@@ -233,13 +302,7 @@ export function MapView({ bundle, renderConfig }: MapViewProps) {
       )
       .attr("d", (datum: BorderRecord) => datum.path)
       .attr("class", (datum: BorderRecord) =>
-        borderClassName(
-          datum,
-          hoveredZoneId,
-          focusedZoneId,
-          isInteracting,
-          resolvedRenderConfig,
-        ),
+        borderClassName(datum, hoveredZoneId, focusedZoneId, isInteracting, resolvedRenderConfig),
       );
 
     const activeZoneId = hoveredZoneId ?? focusedZoneId;
@@ -305,7 +368,9 @@ export function MapView({ bundle, renderConfig }: MapViewProps) {
     focusedZoneId,
     hoveredZoneId,
     isInteracting,
+    onZoneClick,
     resolvedRenderConfig,
+    resolvedTheme,
     viewport,
     visibleBorders,
     visibleZones,
@@ -324,18 +389,26 @@ export function MapView({ bundle, renderConfig }: MapViewProps) {
           Reset View
         </button>
       </div>
-      <div className="map-viewport" ref={containerRef}>
-        <svg ref={svgRef} className="map-svg" aria-label="Hierarchical map" />
-        {hoveredZone !== null && pointerPosition !== null ? (
-          <div
-            className="map-tooltip"
-            style={{
-              left: `${pointerPosition.x + 14}px`,
-              top: `${pointerPosition.y + 14}px`,
-            }}
-          >
-            {formatZoneName(hoveredZone.name)}
-          </div>
+      <div className="map-layout">
+        {panel?.enabled && panel.position === "left" ? (
+          <SidePanel config={panel}>{panelContent}</SidePanel>
+        ) : null}
+        <div className="map-viewport" ref={containerRef}>
+          <svg ref={svgRef} className="map-svg" aria-label="Hierarchical map" />
+          {hoveredZone !== null && pointerPosition !== null ? (
+            <div
+              className="map-tooltip"
+              style={{
+                left: `${pointerPosition.x + 14}px`,
+                top: `${pointerPosition.y + 14}px`,
+              }}
+            >
+              {formatZoneName(hoveredZone.name)}
+            </div>
+          ) : null}
+        </div>
+        {panel?.enabled && panel.position !== "left" ? (
+          <SidePanel config={panel}>{panelContent}</SidePanel>
         ) : null}
       </div>
     </div>
@@ -515,14 +588,44 @@ function focusZone(
     .call(zoomRef.current.transform, fitZoneTransform(zone, viewport));
 }
 
+function manageSvgDefs(
+  svg: d3.Selection<SVGSVGElement, unknown, null, undefined>,
+  resolvedTheme: ResolvedTheme,
+) {
+  let defs = svg.select<SVGDefsElement>("defs");
+  if (defs.empty()) {
+    defs = svg.append("defs");
+  }
+
+  // Clear old texture patterns
+  defs.selectAll("pattern.zone-texture-pattern").remove();
+
+  if (resolvedTheme.texture !== null) {
+    const pat = resolvedTheme.texture;
+    const pattern = defs
+      .append("pattern")
+      .attr("class", "zone-texture-pattern")
+      .attr("id", pat.id)
+      .attr("patternUnits", "userSpaceOnUse")
+      .attr("width", pat.width)
+      .attr("height", pat.height);
+    pattern.html(pat.content);
+  }
+}
+
 function zoneClassName(
   zone: ZoneRecord,
   hoveredZoneId: number | null,
   focusedZoneId: number | null,
   isInteracting: boolean,
   renderConfig: MapRenderConfig,
+  resolvedTheme: ResolvedTheme,
 ): string {
-  const classes = ["region", animationClassForZone(zone.id)];
+  // Per-zone registry overrides theme default; theme default replaces "hover-default"
+  const registryClass = animationClassForZone(zone.id);
+  const hoverClass =
+    registryClass !== "hover-default" ? registryClass : resolvedTheme.hoverClassName;
+  const classes = ["region", hoverClass];
   if (hoveredZoneId === zone.id) {
     classes.push("is-hovered");
   }
@@ -572,11 +675,6 @@ function activeOutlineClassName(
     classes.push("is-interacting");
   }
   return classes.join(" ");
-}
-
-function zoneColor(zoneId: number): string {
-  const hue = (zoneId * 47) % 360;
-  return d3.hsl(hue, 0.48, 0.55).formatHex();
 }
 
 function formatZoneName(name: string): string {
