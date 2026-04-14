@@ -25,6 +25,7 @@ interface PointerPosition {
 }
 
 const PADDING = 48;
+const PANEL_TRANSITION_MS = 300;
 const DEFAULT_RENDER_CONFIG: MapRenderConfig = {
   detailCommitMode: "animation-frame",
   interactionSettleMs: 80,
@@ -56,7 +57,6 @@ export function MapView({
   const minimumDepth = minVisibleDepth(bundle);
   const [hoveredZoneId, setHoveredZoneId] = useState<number | null>(null);
   const [pointerPosition, setPointerPosition] = useState<PointerPosition | null>(null);
-  const initialFocusZoneId = firstZoneAtDepth(bundle, minimumDepth) ?? bundle.rootId;
   const [focusedZoneId, setFocusedZoneId] = useState<number | null>(null);
   const visibleZones = resolveVisibleZones(bundle, committedTransform.k, viewport);
   const visibleZoneIds = new Set(visibleZones.map((zone) => zone.id));
@@ -251,8 +251,25 @@ export function MapView({
         regionElementsRef.current.set(datum.id, this);
       })
       .on("click", (_: MouseEvent, datum: ZoneRecord) => {
-        focusZone(datum.id, bundle, viewport, svgRef, zoomRef, setFocusedZoneId);
         onZoneClick?.(datum);
+        focusZone(
+          datum.id,
+          bundle,
+          currentViewportSize(containerRef.current, viewport),
+          svgRef,
+          zoomRef,
+          setFocusedZoneId,
+        );
+        window.setTimeout(() => {
+          focusZone(
+            datum.id,
+            bundle,
+            currentViewportSize(containerRef.current, viewport),
+            svgRef,
+            zoomRef,
+            setFocusedZoneId,
+          );
+        }, PANEL_TRANSITION_MS);
       });
 
     const currentVisibleZoneIds = new Set(visibleZones.map((zone) => zone.id));
@@ -352,7 +369,10 @@ export function MapView({
           x: event.clientX - bounds.left,
           y: event.clientY - bounds.top,
         });
-        setHoveredZoneId(hitTestVisibleZone(event, visibleZones, regionElementsRef.current));
+        setHoveredZoneId(
+          zoneIdFromEventTarget(event.target) ??
+            hitTestVisibleZone(event, visibleZones, regionElementsRef.current),
+        );
       })
       .on("mouseleave.hoverhit", () => {
         hoverArmedRef.current = false;
@@ -382,9 +402,13 @@ export function MapView({
         <button
           className="map-button"
           type="button"
-          onClick={() =>
-            focusZone(initialFocusZoneId, bundle, viewport, svgRef, zoomRef, setFocusedZoneId)
-          }
+          onClick={() => resetView(
+            bundle,
+            currentViewportSize(containerRef.current, viewport),
+            svgRef,
+            zoomRef,
+            setFocusedZoneId,
+          )}
         >
           Reset View
         </button>
@@ -561,6 +585,20 @@ function projectBBox(bbox: [number, number, number, number], viewport: ViewportS
   ] as const;
 }
 
+function currentViewportSize(
+  container: HTMLDivElement | null,
+  fallback: ViewportSize,
+): ViewportSize {
+  if (container === null) {
+    return fallback;
+  }
+  const bounds = container.getBoundingClientRect();
+  return {
+    width: Math.max(Math.round(bounds.width), 320),
+    height: Math.max(Math.round(bounds.height), 480),
+  };
+}
+
 function focusZone(
   zoneId: number,
   bundle: FrontendBundle,
@@ -586,6 +624,31 @@ function focusZone(
     .duration(850)
     .ease(d3.easeCubicInOut)
     .call(zoomRef.current.transform, fitZoneTransform(zone, viewport));
+}
+
+function resetView(
+  bundle: FrontendBundle,
+  viewport: ViewportSize,
+  svgRef: RefObject<SVGSVGElement>,
+  zoomRef: RefObject<d3.ZoomBehavior<SVGSVGElement, unknown> | null>,
+  setFocusedZoneId: Dispatch<SetStateAction<number | null>>,
+) {
+  if (
+    svgRef.current === null ||
+    zoomRef.current === null ||
+    viewport.width <= 0 ||
+    viewport.height <= 0
+  ) {
+    return;
+  }
+
+  const entryBBox = combinedBBox(zonesAtDepth(bundle, minVisibleDepth(bundle))) ?? bundle.worldBBox;
+  setFocusedZoneId(null);
+  d3.select(svgRef.current)
+    .transition()
+    .duration(850)
+    .ease(d3.easeCubicInOut)
+    .call(zoomRef.current.transform, fitBBoxTransform(entryBBox, viewport));
 }
 
 function manageSvgDefs(
@@ -770,11 +833,28 @@ function hitTestVisibleZone(
   return null;
 }
 
+function zoneIdFromEventTarget(target: EventTarget | null): number | null {
+  if (!(target instanceof SVGPathElement)) {
+    return null;
+  }
+  if (!target.classList.contains("region")) {
+    return null;
+  }
+  const zoneId = Number(target.dataset.zoneId);
+  return Number.isFinite(zoneId) ? zoneId : null;
+}
+
 function minVisibleDepth(bundle: FrontendBundle): number {
   return bundle.maxDepth >= 1 ? 1 : 0;
 }
 
-function firstZoneAtDepth(bundle: FrontendBundle, depth: number): number | null {
+function zonesAtDepth(bundle: FrontendBundle, depth: number): ZoneRecord[] {
   const zoneIds = bundle.levels.get(depth);
-  return zoneIds !== undefined && zoneIds.length > 0 ? zoneIds[0] : null;
+  if (zoneIds === undefined) {
+    return [];
+  }
+  return zoneIds.flatMap((zoneId) => {
+    const zone = bundle.zones.get(zoneId);
+    return zone === undefined ? [] : [zone];
+  });
 }
