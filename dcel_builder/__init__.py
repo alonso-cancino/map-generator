@@ -14,7 +14,7 @@ def _package_version() -> str:
     try:
         return version("dcel-map-generator")
     except PackageNotFoundError:
-        return "0.8.1"
+        return "0.8.2"
 
 
 __version__ = _package_version()
