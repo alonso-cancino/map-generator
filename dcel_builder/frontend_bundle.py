@@ -151,69 +151,61 @@ def _arc_reverse_c_commands(arc: _Arc) -> str:
 
 def _ring_path_from_halfedges(
     halfedge_ids: list[int],
-    arcs: list[_Arc],
-    halfedge_to_arc: dict[int, tuple[int, int]],
+    halfedge_to_step: dict[int, str],
     dcel: DCEL,
     closed: bool = True,
 ) -> str:
-    """Assemble an SVG path by walking halfedges and grouping them by arc.
+    """Assemble an SVG path by emitting one cubic Bezier per half-edge.
 
-    Each halfedge in ``halfedge_ids`` maps to an ``(arc_id, direction)``.
-    Consecutive halfedges sharing an arc_id are emitted as one arc in that
-    direction. The very first halfedge's origin supplies the ``M`` anchor.
+    The very first half-edge supplies the ``M`` anchor. Each subsequent
+    half-edge contributes exactly one cubic segment (precomputed once in
+    ``_build_arcs``) whose destination matches that half-edge's destination
+    vertex, so the walk can start in the middle of an arc and still produce
+    a continuous, non-self-intersecting ring.
 
     If ``closed`` is True, the path ends with ``Z``.
     """
     if not halfedge_ids:
         return ""
-
-    commands: list[str] = []
     first_h = halfedge_ids[0]
     first_origin = dcel.halfedges[first_h].origin
-    first_coord = (dcel.vertices[first_origin].x, dcel.vertices[first_origin].y)
-    commands.append(f"M{_fmt(first_coord[0])},{_fmt(first_coord[1])}")
-
-    current_arc_id: int | None = None
-    current_direction: int = 0
-    i = 0
-    n = len(halfedge_ids)
-    while i < n:
-        h_idx = halfedge_ids[i]
-        arc_id, direction = halfedge_to_arc[h_idx]
-        if arc_id != current_arc_id or direction != current_direction:
-            arc = arcs[arc_id]
-            if direction == 1:
-                commands.append(_arc_forward_c_commands(arc))
-            else:
-                commands.append(_arc_reverse_c_commands(arc))
-            current_arc_id = arc_id
-            current_direction = direction
-        i += 1
-
+    first_v = dcel.vertices[first_origin]
+    commands: list[str] = [f"M{_fmt(first_v.x)},{_fmt(first_v.y)}"]
+    for h_idx in halfedge_ids:
+        commands.append(halfedge_to_step[h_idx])
     if closed:
         commands.append("Z")
-    return " ".join(cmd for cmd in commands if cmd)
+    return " ".join(commands)
 
 
 def _build_arcs(
     dcel: DCEL,
     face_sets: list[set[int]],
     corner_vertices: set[int],
-) -> tuple[list[_Arc], dict[int, tuple[int, int]]]:
-    """Decompose the DCEL into arcs: maximal chains of half-edges with a fixed face pair.
+) -> tuple[list[_Arc], dict[int, str]]:
+    """Decompose the DCEL into arcs and precompute per-half-edge cubic commands.
 
-    Returns (arcs, halfedge_to_arc) where halfedge_to_arc[halfedge_id] is
-    (arc_id, direction). Direction is +1 if the halfedge matches the arc's
-    stored forward traversal, -1 for the twin direction.
+    An arc is a maximal chain of half-edges sharing the same unordered face
+    pair, split at any vertex that is not interior to the pair (a node). Each
+    arc is smoothed once via open Catmull-Rom, producing one cubic segment per
+    forward half-edge.
+
+    Returns ``(arcs, halfedge_to_step)``. ``halfedge_to_step[h_idx]`` is the
+    complete ``C c1 c2 p`` command that should be emitted when a path walk
+    traverses ``h_idx``. For a forward half-edge the destination is the next
+    arc vertex; for a twin half-edge the destination is the previous arc
+    vertex, and the control points are swapped (the standard cubic reversal).
+    This makes paths correct even when the walk starts mid-arc.
     """
     arcs: list[_Arc] = []
-    halfedge_to_arc: dict[int, tuple[int, int]] = {}
+    halfedge_to_step: dict[int, str] = {}
+    assigned: set[int] = set()
 
     def is_node(v_idx: int) -> bool:
         return _is_node_vertex(v_idx, face_sets, corner_vertices)
 
     for seed_idx in range(len(dcel.halfedges)):
-        if seed_idx in halfedge_to_arc:
+        if seed_idx in assigned:
             continue
 
         fp = _halfedge_face_pair(dcel, seed_idx)
@@ -266,24 +258,38 @@ def _build_arcs(
         )
         arcs.append(arc)
 
-        for h_idx in chain:
-            halfedge_to_arc[h_idx] = (arc_id, 1)
-            twin_idx = dcel.halfedges[h_idx].twin
-            halfedge_to_arc[twin_idx] = (arc_id, -1)
+        for local_i, h_idx in enumerate(chain):
+            c1x, c1y, c2x, c2y, px, py = arc.segments[local_i]
+            forward_c = (
+                f"C{_fmt(c1x)},{_fmt(c1y)} "
+                f"{_fmt(c2x)},{_fmt(c2y)} "
+                f"{_fmt(px)},{_fmt(py)}"
+            )
+            halfedge_to_step[h_idx] = forward_c
+            assigned.add(h_idx)
 
-    assert len(halfedge_to_arc) == len(dcel.halfedges), (
+            twin_idx = dcel.halfedges[h_idx].twin
+            prev_x, prev_y = arc.coords[local_i]
+            reverse_c = (
+                f"C{_fmt(c2x)},{_fmt(c2y)} "
+                f"{_fmt(c1x)},{_fmt(c1y)} "
+                f"{_fmt(prev_x)},{_fmt(prev_y)}"
+            )
+            halfedge_to_step[twin_idx] = reverse_c
+            assigned.add(twin_idx)
+
+    assert len(halfedge_to_step) == len(dcel.halfedges), (
         f"arc decomposition coverage mismatch: "
-        f"{len(halfedge_to_arc)} of {len(dcel.halfedges)} halfedges assigned"
+        f"{len(halfedge_to_step)} of {len(dcel.halfedges)} halfedges assigned"
     )
-    return arcs, halfedge_to_arc
+    return arcs, halfedge_to_step
 
 
 def _ring_path_from_coord_ring(
     ring_coords: list[tuple[float, float]],
     directed_edge_to_halfedge: dict[tuple[int, int], int],
     coord_to_vertex: dict[tuple[float, float], int],
-    arcs: list[_Arc],
-    halfedge_to_arc: dict[int, tuple[int, int]],
+    halfedge_to_step: dict[int, str],
     dcel: DCEL,
 ) -> str:
     """Assemble a closed smoothed ring from a shapely coord sequence.
@@ -300,17 +306,14 @@ def _ring_path_from_coord_ring(
         v_from = vertex_ring[i]
         v_to = vertex_ring[(i + 1) % n]
         halfedge_ids.append(directed_edge_to_halfedge[(v_from, v_to)])
-    return _ring_path_from_halfedges(
-        halfedge_ids, arcs, halfedge_to_arc, dcel, closed=True
-    )
+    return _ring_path_from_halfedges(halfedge_ids, halfedge_to_step, dcel, closed=True)
 
 
 def _zone_path_from_geometry(
     geometry,
     directed_edge_to_halfedge: dict[tuple[int, int], int],
     coord_to_vertex: dict[tuple[float, float], int],
-    arcs: list[_Arc],
-    halfedge_to_arc: dict[int, tuple[int, int]],
+    halfedge_to_step: dict[int, str],
     dcel: DCEL,
 ) -> str:
     """Serialize a (Multi)Polygon via arc assembly."""
@@ -325,8 +328,7 @@ def _zone_path_from_geometry(
                 exterior,
                 directed_edge_to_halfedge,
                 coord_to_vertex,
-                arcs,
-                halfedge_to_arc,
+                halfedge_to_step,
                 dcel,
             )
         )
@@ -339,8 +341,7 @@ def _zone_path_from_geometry(
                     ring,
                     directed_edge_to_halfedge,
                     coord_to_vertex,
-                    arcs,
-                    halfedge_to_arc,
+                    halfedge_to_step,
                     dcel,
                 )
             )
@@ -425,7 +426,7 @@ def build_frontend_bundle(dcel: DCEL, tree: ZoneTree, zone_index: dict[int, str]
 
     face_sets = _vertex_face_sets(dcel)
     corner_vertices = _corner_vertex_indices(dcel)
-    arcs, halfedge_to_arc = _build_arcs(dcel, face_sets, corner_vertices)
+    arcs, halfedge_to_step = _build_arcs(dcel, face_sets, corner_vertices)
     directed_edge_to_halfedge, coord_to_vertex = _build_halfedge_indices(dcel)
 
     def serialize_zone(geometry) -> str:
@@ -433,8 +434,7 @@ def build_frontend_bundle(dcel: DCEL, tree: ZoneTree, zone_index: dict[int, str]
             geometry,
             directed_edge_to_halfedge,
             coord_to_vertex,
-            arcs,
-            halfedge_to_arc,
+            halfedge_to_step,
             dcel,
         )
 

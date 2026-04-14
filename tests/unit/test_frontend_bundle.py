@@ -127,39 +127,29 @@ def _format_fmt(value: float) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-def _reverse_subpath(subpath: str) -> str:
-    """Produce the reversed form of one ``M ... C ... C ...`` sub-path.
-
-    Matches the byte-level output of ``_arc_reverse_c_commands`` in
-    frontend_bundle.py: walks anchors in reverse order, swapping c1/c2
-    per segment.
-    """
-    start, segments = _parse_subpath(subpath)
-    if not segments:
-        return f"M{_format_pair(start)}"
-    anchors = [start] + [seg[2] for seg in segments]
-    out = [f"M{_format_pair(anchors[-1])}"]
-    for k in range(len(segments) - 1, -1, -1):
-        c1, c2, _ = segments[k]
-        prev_anchor = anchors[k]
-        out.append(f"C{_format_pair(c2)} {_format_pair(c1)} {_format_pair(prev_anchor)}")
-    return " ".join(out)
-
-
 def _border_appears_in_path(border_subpath: str, haystack: str) -> bool:
-    """True if the border's arc bytes (forward or reversed) appear in haystack."""
-    # Strip leading "M x,y " so we can do a substring match on the C portion.
-    _, forward_segments = _parse_subpath(border_subpath)
-    forward_c = " ".join(
-        f"C{_format_pair(c1)} {_format_pair(c2)} {_format_pair(p)}"
-        for (c1, c2, p) in forward_segments
-    )
-    if forward_c and forward_c in haystack:
+    """True if every segment in the border is present (forward or reverse) in haystack.
+
+    The map backend emits one cubic Bezier per half-edge. A leaf's face
+    cycle may start in the middle of an arc, which splits the arc's bytes
+    across the end and beginning of the fill path — so we check each
+    segment individually rather than requiring one contiguous substring.
+    Each segment's reverse form uses coords[k] (the start of forward
+    segment k) as its anchor, which is exactly what the backend emits
+    for the twin half-edge in the opposite face cycle.
+    """
+    start, segments = _parse_subpath(border_subpath)
+    if not segments:
         return True
-    reverse_full = _reverse_subpath(border_subpath)
-    # Strip the leading "M x,y " to get only the C sequence.
-    reverse_c = reverse_full.split(" ", 1)[1] if " " in reverse_full else ""
-    return bool(reverse_c) and reverse_c in haystack
+    anchors = [start] + [seg[2] for seg in segments]
+    for i, (c1, c2, p) in enumerate(segments):
+        forward_c = f"C{_format_pair(c1)} {_format_pair(c2)} {_format_pair(p)}"
+        reverse_c = (
+            f"C{_format_pair(c2)} {_format_pair(c1)} {_format_pair(anchors[i])}"
+        )
+        if forward_c not in haystack and reverse_c not in haystack:
+            return False
+    return True
 
 
 def test_sibling_border_bytes_appear_in_sibling_fill(small_bundle):
