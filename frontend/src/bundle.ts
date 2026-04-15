@@ -45,6 +45,7 @@ export function parseBundle(raw: RawFrontendBundle): FrontendBundle {
     rootId: raw.root_id,
     maxDepth: raw.max_depth,
     worldBBox: raw.world_bbox,
+    worldOutlinePath: raw.world_outline_path ?? null,
     levels,
     zones,
     zoomDepthThresholds,

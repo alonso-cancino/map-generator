@@ -21,6 +21,7 @@ export interface RawFrontendBundle {
   root_id: number;
   max_depth: number;
   world_bbox: [number, number, number, number];
+  world_outline_path?: string;
   zoom_depth_thresholds: Record<string, number>;
   levels: Record<string, number[]>;
   borders: RawBorderRecord[];
@@ -50,6 +51,7 @@ export interface FrontendBundle {
   rootId: number;
   maxDepth: number;
   worldBBox: [number, number, number, number];
+  worldOutlinePath: string | null;
   zoomDepthThresholds: Map<number, number>;
   levels: Map<number, number[]>;
   borders: BorderRecord[];

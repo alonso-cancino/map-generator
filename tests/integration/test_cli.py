@@ -119,6 +119,7 @@ def test_cli_writes_frontend_bundle(tmp_path):
     assert bundle["max_depth"] >= 1
     assert "0" in bundle["levels"]
     assert "0" in bundle["zones"]
+    assert bundle["world_outline_path"].startswith("M")
     assert bundle["borders"]
     assert bundle["zones"]["0"]["child_ids"]
     assert bundle["zones"]["0"]["path"].startswith("M")

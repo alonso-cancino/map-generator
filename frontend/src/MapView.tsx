@@ -1,5 +1,5 @@
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
 import { animationClassForZone } from "./animations";
 import { SidePanel } from "./SidePanel";
@@ -10,6 +10,7 @@ import type {
   MapRenderConfig,
   MapViewProps,
   ResolvedTheme,
+  SidePanelConfig,
   SvgPatternDef,
   ZoneRecord,
 } from "./types";
@@ -25,6 +26,9 @@ interface PointerPosition {
 }
 
 const PADDING = 48;
+const FOCUS_PADDING = 32;
+const FOCUS_REVEAL_OVERSHOOT = 1.03;
+const FOCUS_TRANSITION_MS = 850;
 const PANEL_TRANSITION_MS = 300;
 const DEFAULT_RENDER_CONFIG: MapRenderConfig = {
   detailCommitMode: "animation-frame",
@@ -51,10 +55,10 @@ export function MapView({
   const latestTransformRef = useRef(d3.zoomIdentity);
   const animationFrameRef = useRef<number | null>(null);
   const settleTimeoutRef = useRef<number | null>(null);
+  const focusTimeoutRef = useRef<number | null>(null);
   const [viewport, setViewport] = useState<ViewportSize>({ width: 960, height: 720 });
   const [committedTransform, setCommittedTransform] = useState(d3.zoomIdentity);
   const [isInteracting, setIsInteracting] = useState(false);
-  const minimumDepth = minVisibleDepth(bundle);
   const [hoveredZoneId, setHoveredZoneId] = useState<number | null>(null);
   const [pointerPosition, setPointerPosition] = useState<PointerPosition | null>(null);
   const [focusedZoneId, setFocusedZoneId] = useState<number | null>(null);
@@ -64,8 +68,16 @@ export function MapView({
     (border) => visibleZoneIds.has(border.zoneIds[0]) && visibleZoneIds.has(border.zoneIds[1]),
   );
   const hoveredZone = hoveredZoneId === null ? null : bundle.zones.get(hoveredZoneId) ?? null;
-  const resolvedRenderConfig = resolveRenderConfig(renderConfig);
-  const resolvedTheme = resolveTheme(theme);
+  const worldOutlinePath = bundle.worldOutlinePath ?? bundle.zones.get(bundle.rootId)?.path ?? null;
+  // Memoized so the zoom-setup effect's cleanup (which clears the pending
+  // focus timeout on teardown) isn't re-run on every parent re-render. Before
+  // memoization, clicking a zone with the panel hidden scheduled a 300ms focus
+  // and then immediately cancelled it when `onZoneClick` updated panel state.
+  const resolvedRenderConfig = useMemo(
+    () => resolveRenderConfig(renderConfig),
+    [renderConfig],
+  );
+  const resolvedTheme = useMemo(() => resolveTheme(theme), [theme]);
 
   // Inject custom hover keyframes
   useEffect(() => {
@@ -92,6 +104,7 @@ export function MapView({
   useEffect(() => {
     initialViewAppliedRef.current = false;
     latestTransformRef.current = d3.zoomIdentity;
+    clearFocusTimeout(focusTimeoutRef);
     setCommittedTransform(d3.zoomIdentity);
     setFocusedZoneId(null);
     setHoveredZoneId(null);
@@ -168,6 +181,7 @@ export function MapView({
     return () => {
       selection.on(".zoom", null);
       clearScheduledWork(animationFrameRef, settleTimeoutRef);
+      clearFocusTimeout(focusTimeoutRef);
     };
   }, [bundle, resolvedRenderConfig]);
 
@@ -181,19 +195,15 @@ export function MapView({
     ) {
       return;
     }
-    const initialBBox = combinedBBox(visibleZones);
-    if (initialBBox === null) {
-      return;
-    }
     initialViewAppliedRef.current = true;
     hoverArmedRef.current = false;
     setHoveredZoneId(null);
     setPointerPosition(null);
     d3.select(svgRef.current).call(
       zoomRef.current.transform,
-      fitBBoxTransform(initialBBox, viewport),
+      fitBBoxTransform(bundle.worldBBox, viewport),
     );
-  }, [bundle, minimumDepth, viewport, visibleZones]);
+  }, [bundle, viewport]);
 
   useEffect(() => {
     if (svgRef.current === null) {
@@ -217,6 +227,7 @@ export function MapView({
     const fillLayer = ensureGroupLayer(sceneLayer, "fill-layer");
     const textureLayer = ensureGroupLayer(sceneLayer, "texture-layer");
     const borderLayer = ensureGroupLayer(sceneLayer, "border-layer");
+    const continentOutlineLayer = ensureGroupLayer(sceneLayer, "continent-outline-layer");
     const activeOutlineLayer = ensureGroupLayer(sceneLayer, "active-outline-layer");
 
     const regionSelection = fillLayer
@@ -251,25 +262,19 @@ export function MapView({
         regionElementsRef.current.set(datum.id, this);
       })
       .on("click", (_: MouseEvent, datum: ZoneRecord) => {
+        const focusDelayMs = panelWillResizeOnClick(panel) ? PANEL_TRANSITION_MS : 0;
         onZoneClick?.(datum);
-        focusZone(
+        scheduleFocusZone(
           datum.id,
           bundle,
-          currentViewportSize(containerRef.current, viewport),
+          focusDelayMs,
+          containerRef,
+          viewport,
           svgRef,
           zoomRef,
           setFocusedZoneId,
+          focusTimeoutRef,
         );
-        window.setTimeout(() => {
-          focusZone(
-            datum.id,
-            bundle,
-            currentViewportSize(containerRef.current, viewport),
-            svgRef,
-            zoomRef,
-            setFocusedZoneId,
-          );
-        }, PANEL_TRANSITION_MS);
       });
 
     const currentVisibleZoneIds = new Set(visibleZones.map((zone) => zone.id));
@@ -321,6 +326,24 @@ export function MapView({
       .attr("class", (datum: BorderRecord) =>
         borderClassName(datum, hoveredZoneId, focusedZoneId, isInteracting, resolvedRenderConfig),
       );
+
+    const continentOutlineSelection = continentOutlineLayer
+      .selectAll<SVGPathElement, string>("path.continent-outline")
+      .data(worldOutlinePath === null ? [] : [worldOutlinePath]);
+
+    continentOutlineSelection
+      .join(
+        (enter: d3.Selection<d3.EnterElement, string, SVGGElement, unknown>) =>
+          enter
+            .append("path")
+            .attr("class", "continent-outline")
+            .attr("fill", "none")
+            .attr("vector-effect", "non-scaling-stroke")
+            .attr("pointer-events", "none"),
+        (update: d3.Selection<SVGPathElement, string, SVGGElement, unknown>) => update,
+        (exit: d3.Selection<SVGPathElement, string, SVGGElement, unknown>) => exit.remove(),
+      )
+      .attr("d", (path: string) => path);
 
     const activeZoneId = hoveredZoneId ?? focusedZoneId;
     const activeZone =
@@ -389,11 +412,13 @@ export function MapView({
     hoveredZoneId,
     isInteracting,
     onZoneClick,
+    panel,
     resolvedRenderConfig,
     resolvedTheme,
     viewport,
     visibleBorders,
     visibleZones,
+    worldOutlinePath,
   ]);
 
   return (
@@ -496,6 +521,13 @@ function clearSettleTimeout(settleTimeoutRef: MutableRefObject<number | null>) {
   }
 }
 
+function clearFocusTimeout(focusTimeoutRef: MutableRefObject<number | null>) {
+  if (focusTimeoutRef.current !== null) {
+    window.clearTimeout(focusTimeoutRef.current);
+    focusTimeoutRef.current = null;
+  }
+}
+
 function scheduleCommittedTransform(
   latestTransformRef: MutableRefObject<d3.ZoomTransform>,
   renderConfig: MapRenderConfig,
@@ -551,26 +583,52 @@ function baseSceneTransform(viewport: ViewportSize): string {
   return `translate(${offsetX}, ${offsetY + scale}) scale(${scale}, ${-scale})`;
 }
 
-function fitZoneTransform(zone: ZoneRecord, viewport: ViewportSize): d3.ZoomTransform {
-  return fitBBoxTransform(zone.bbox, viewport);
+function fitZoneTransform(
+  zone: ZoneRecord,
+  viewport: ViewportSize,
+  maxScale: number,
+): d3.ZoomTransform {
+  const fitScale = fitScaleForBBox(zone.bbox, viewport, FOCUS_PADDING);
+  const revealScale =
+    zone.childIds.length === 0
+      ? fitScale
+      : revealScaleForZone(zone, viewport) * FOCUS_REVEAL_OVERSHOOT;
+  const targetScale = Math.min(Math.max(fitScale, revealScale), maxScale);
+  return centeredBBoxTransform(zone.bbox, viewport, targetScale);
 }
 
 function fitBBoxTransform(
   bbox: [number, number, number, number],
   viewport: ViewportSize,
+  padding = PADDING,
 ): d3.ZoomTransform {
+  return centeredBBoxTransform(bbox, viewport, fitScaleForBBox(bbox, viewport, padding));
+}
+
+function fitScaleForBBox(
+  bbox: [number, number, number, number],
+  viewport: ViewportSize,
+  padding: number,
+): number {
   const [minX, minY, maxX, maxY] = projectBBox(bbox, viewport);
   const bboxWidth = Math.max(maxX - minX, 1);
   const bboxHeight = Math.max(maxY - minY, 1);
+  const availableWidth = Math.max(viewport.width - padding * 2, 1);
+  const availableHeight = Math.max(viewport.height - padding * 2, 1);
+  return Math.min(availableWidth / bboxWidth, availableHeight / bboxHeight);
+}
+
+function centeredBBoxTransform(
+  bbox: [number, number, number, number],
+  viewport: ViewportSize,
+  scale: number,
+): d3.ZoomTransform {
+  const [minX, minY, maxX, maxY] = projectBBox(bbox, viewport);
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
-  const fitScale = Math.min(
-    (viewport.width - PADDING * 2) / bboxWidth,
-    (viewport.height - PADDING * 2) / bboxHeight,
-  );
   return d3.zoomIdentity
-    .translate(viewport.width / 2 - fitScale * cx, viewport.height / 2 - fitScale * cy)
-    .scale(fitScale);
+    .translate(viewport.width / 2 - scale * cx, viewport.height / 2 - scale * cy)
+    .scale(scale);
 }
 
 function projectBBox(bbox: [number, number, number, number], viewport: ViewportSize) {
@@ -599,6 +657,40 @@ function currentViewportSize(
   };
 }
 
+function scheduleFocusZone(
+  zoneId: number,
+  bundle: FrontendBundle,
+  delayMs: number,
+  containerRef: RefObject<HTMLDivElement>,
+  fallbackViewport: ViewportSize,
+  svgRef: RefObject<SVGSVGElement>,
+  zoomRef: RefObject<d3.ZoomBehavior<SVGSVGElement, unknown> | null>,
+  setFocusedZoneId: Dispatch<SetStateAction<number | null>>,
+  focusTimeoutRef: MutableRefObject<number | null>,
+) {
+  clearFocusTimeout(focusTimeoutRef);
+  setFocusedZoneId(zoneId);
+
+  const runFocus = () => {
+    focusTimeoutRef.current = null;
+    focusZone(
+      zoneId,
+      bundle,
+      currentViewportSize(containerRef.current, fallbackViewport),
+      svgRef,
+      zoomRef,
+      setFocusedZoneId,
+    );
+  };
+
+  if (delayMs <= 0) {
+    runFocus();
+    return;
+  }
+
+  focusTimeoutRef.current = window.setTimeout(runFocus, delayMs);
+}
+
 function focusZone(
   zoneId: number,
   bundle: FrontendBundle,
@@ -619,11 +711,13 @@ function focusZone(
   }
 
   setFocusedZoneId(zoneId);
+  const [, maxScale] = zoomRef.current.scaleExtent();
   d3.select(svgRef.current)
+    .interrupt()
     .transition()
-    .duration(850)
+    .duration(FOCUS_TRANSITION_MS)
     .ease(d3.easeCubicInOut)
-    .call(zoomRef.current.transform, fitZoneTransform(zone, viewport));
+    .call(zoomRef.current.transform, fitZoneTransform(zone, viewport, maxScale));
 }
 
 function resetView(
@@ -642,13 +736,13 @@ function resetView(
     return;
   }
 
-  const entryBBox = combinedBBox(zonesAtDepth(bundle, minVisibleDepth(bundle))) ?? bundle.worldBBox;
   setFocusedZoneId(null);
   d3.select(svgRef.current)
+    .interrupt()
     .transition()
-    .duration(850)
+    .duration(FOCUS_TRANSITION_MS)
     .ease(d3.easeCubicInOut)
-    .call(zoomRef.current.transform, fitBBoxTransform(entryBBox, viewport));
+    .call(zoomRef.current.transform, fitBBoxTransform(bundle.worldBBox, viewport));
 }
 
 function manageSvgDefs(
@@ -744,19 +838,12 @@ function formatZoneName(name: string): string {
   return name.replace(/_/g, " ");
 }
 
-function combinedBBox(zones: ZoneRecord[]): [number, number, number, number] | null {
-  if (zones.length === 0) {
-    return null;
+function panelWillResizeOnClick(panel: SidePanelConfig | undefined): boolean {
+  if (panel?.enabled !== true) {
+    return false;
   }
-
-  let [minX, minY, maxX, maxY] = zones[0].bbox;
-  for (const zone of zones.slice(1)) {
-    minX = Math.min(minX, zone.bbox[0]);
-    minY = Math.min(minY, zone.bbox[1]);
-    maxX = Math.max(maxX, zone.bbox[2]);
-    maxY = Math.max(maxY, zone.bbox[3]);
-  }
-  return [minX, minY, maxX, maxY];
+  const currentState = panel.state ?? panel.defaultState ?? "hidden";
+  return currentState === "hidden";
 }
 
 function resolveVisibleZones(
@@ -802,13 +889,7 @@ function resolveVisibleBranch(
 }
 
 function revealScaleForZone(zone: ZoneRecord, viewport: ViewportSize): number {
-  const [minX, minY, maxX, maxY] = projectBBox(zone.bbox, viewport);
-  const bboxWidth = Math.max(maxX - minX, 1);
-  const bboxHeight = Math.max(maxY - minY, 1);
-  return Math.min(
-    (viewport.width - PADDING * 2) / bboxWidth,
-    (viewport.height - PADDING * 2) / bboxHeight,
-  );
+  return fitScaleForBBox(zone.bbox, viewport, PADDING);
 }
 
 function hitTestVisibleZone(
@@ -846,15 +927,4 @@ function zoneIdFromEventTarget(target: EventTarget | null): number | null {
 
 function minVisibleDepth(bundle: FrontendBundle): number {
   return bundle.maxDepth >= 1 ? 1 : 0;
-}
-
-function zonesAtDepth(bundle: FrontendBundle, depth: number): ZoneRecord[] {
-  const zoneIds = bundle.levels.get(depth);
-  if (zoneIds === undefined) {
-    return [];
-  }
-  return zoneIds.flatMap((zoneId) => {
-    const zone = bundle.zones.get(zoneId);
-    return zone === undefined ? [] : [zone];
-  });
 }
