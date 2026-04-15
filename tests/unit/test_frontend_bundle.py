@@ -62,6 +62,11 @@ def test_build_frontend_bundle_includes_all_tree_levels(small_bundle):
     assert root["path"].startswith("M")
     assert "C" in root["path"]
     assert "C" in leaf["path"]
+    # Simplification + per-arc emission should keep small-map paths compact.
+    # Regenerates caught regressions when the whole arc was double-emitted.
+    assert len(root["path"]) < 40_000, (
+        f"root path grew unexpectedly to {len(root['path'])} bytes"
+    )
     assert all(0.0 <= value <= 1.0 for value in root["bbox"])
     assert root["bbox"][0] <= leaf["bbox"][0] <= leaf["bbox"][2] <= root["bbox"][2]
     assert root["bbox"][1] <= leaf["bbox"][1] <= leaf["bbox"][3] <= root["bbox"][3]
@@ -128,28 +133,30 @@ def _format_fmt(value: float) -> str:
 
 
 def _border_appears_in_path(border_subpath: str, haystack: str) -> bool:
-    """True if every segment in the border is present (forward or reverse) in haystack.
+    """True if the border's arc bytes appear verbatim in haystack.
 
-    The map backend emits one cubic Bezier per half-edge. A leaf's face
-    cycle may start in the middle of an arc, which splits the arc's bytes
-    across the end and beginning of the fill path — so we check each
-    segment individually rather than requiring one contiguous substring.
-    Each segment's reverse form uses coords[k] (the start of forward
-    segment k) as its anchor, which is exactly what the backend emits
-    for the twin half-edge in the opposite face cycle.
+    The backend now emits each arc as a single contiguous cubic sequence
+    (per-arc emission with walk rotation to start at a node vertex). So
+    the border's whole C sequence, or its byte-for-byte reversal, should
+    appear once inside every fill path that uses that arc.
     """
     start, segments = _parse_subpath(border_subpath)
     if not segments:
         return True
+    forward_c = " ".join(
+        f"C{_format_pair(c1)} {_format_pair(c2)} {_format_pair(p)}"
+        for (c1, c2, p) in segments
+    )
+    if forward_c and forward_c in haystack:
+        return True
+    # Byte-for-byte reversal: walk anchors in reverse order, swapping c1/c2.
     anchors = [start] + [seg[2] for seg in segments]
-    for i, (c1, c2, p) in enumerate(segments):
-        forward_c = f"C{_format_pair(c1)} {_format_pair(c2)} {_format_pair(p)}"
-        reverse_c = (
-            f"C{_format_pair(c2)} {_format_pair(c1)} {_format_pair(anchors[i])}"
-        )
-        if forward_c not in haystack and reverse_c not in haystack:
-            return False
-    return True
+    reverse_c = " ".join(
+        f"C{_format_pair(segments[k][1])} {_format_pair(segments[k][0])} "
+        f"{_format_pair(anchors[k])}"
+        for k in range(len(segments) - 1, -1, -1)
+    )
+    return bool(reverse_c) and reverse_c in haystack
 
 
 def test_sibling_border_bytes_appear_in_sibling_fill(small_bundle):
